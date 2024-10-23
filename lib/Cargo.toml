@@ -1,0 +1,13 @@
+[package]
+name = "lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libc = "0.2"
+gtk = "0.9"  # Pour les boîtes de dialogue
+notify-rust = "4.5"
+
+[lib]
+name = "lib"
+crate-type = ["cdylib"]
