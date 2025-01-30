@@ -1,0 +1,37 @@
+sudo apt update
+sudo apt install bpfcc-tools
+sudo apt install clang llvm libbpf-dev libelf-dev gcc make
+
+sudo apt install linux-headers-$(uname -r)
+
+sudo apt install bpftool
+
+(run below two commands in same dir where project is)
+wget https://aka.pw/bpf-ecli -O ecli && chmod +x ./ecli 
+wget https://github.com/eunomia-bpf/eunomia-bpf/releases/latest/download/ecc && chmod +x ./ecc 
+
+
+Start
+
+first edit input.txt and add all the paths which you want to block in that file, save it and close
+To run Code first run script.py 
+sudo python3 script.py
+
+than run second script in other terminal
+sudo python3 insert_data_to_map.py
+
+than run (you can remove | grep "Access" to see all the logs)
+sudo cat /sys/kernel/debug/tracing/trace_pipe | grep "Access"
+
+After that in separate terminal run test_filter_code.py, before running this open this file and set paths 
+for testing, 
+
+please see one.png and two.png for reference
+
+Debug Command (try these commands incase of errors)
+sudo apt install linux-image-$(uname -r)-dbg
+sudo apt install libc6-dev-i386
+sudo apt install gcc-multilib
+sudo which bpftool
+export PATH=$PATH:/usr/sbin
+bpftool btf dump file /sys/kernel/btf/vmlinux

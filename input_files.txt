@@ -1,0 +1,2 @@
+/usr/bin/cat:/etc/passwd
+cat:/etc/passwd

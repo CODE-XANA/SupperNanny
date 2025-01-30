@@ -1,0 +1,134 @@
+discord-87690   [008] ...21 105405.698373: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87690   [008] ...21 105405.698373: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87690   [008] ...21 105405.698380: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87690   [008] ...21 105405.698382: bpf_trace_printk: TRACEPOINT: File path: /etc/ld.so.cache
+cat-87690   [008] ...21 105405.698387: bpf_trace_printk: TRACEPOINT: PID: 87690, Parent PID: 16563
+cat-87690   [008] ...21 105405.698398: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87690   [008] ...21 105405.698399: bpf_trace_printk: KPROBE: Process name: cat
+cat-87690   [008] ...21 105405.698402: bpf_trace_printk: KPROBE: No restriction found for process: cat
+cat-87690   [008] ...21 105405.698495: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87690   [008] ...21 105405.698497: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87690   [008] ...21 105405.698499: bpf_trace_printk: TRACEPOINT: File path: /lib/x86_64-linux-gnu/libc.so.6
+cat-87690   [008] ...21 105405.698501: bpf_trace_printk: TRACEPOINT: PID: 87690, Parent PID: 16563
+cat-87690   [008] ...21 105405.698506: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87690   [008] ...21 105405.698507: bpf_trace_printk: KPROBE: Process name: cat
+cat-87690   [008] ...21 105405.698509: bpf_trace_printk: KPROBE: No restriction found for process: cat
+cat-87690   [008] ...21 105405.699322: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87690   [008] ...21 105405.699325: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87690   [008] ...21 105405.699328: bpf_trace_printk: TRACEPOINT: File path: /usr/lib/locale/locale-archive
+cat-87690   [008] ...21 105405.699330: bpf_trace_printk: TRACEPOINT: PID: 87690, Parent PID: 16563
+cat-87690   [008] ...21 105405.699336: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87690   [008] ...21 105405.699337: bpf_trace_printk: KPROBE: Process name: cat
+cat-87690   [008] ...21 105405.699339: bpf_trace_printk: KPROBE: No restriction found for process: cat
+cat-87690   [008] ...21 105405.699594: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87690   [008] ...21 105405.699600: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87690   [008] ...21 105405.699603: bpf_trace_printk: TRACEPOINT: File path: data.json
+cat-87690   [008] ...21 105405.699607: bpf_trace_printk: TRACEPOINT: PID: 87690, Parent PID: 16563
+cat-87690   [008] ...21 105405.699614: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87690   [008] ...21 105405.699615: bpf_trace_printk: KPROBE: Process name: cat
+cat-87690   [008] ...21 105405.699618: bpf_trace_printk: KPROBE: No restriction found for process: cat
+cat-87727   [000] ...21 105434.287432: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.287455: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.287459: bpf_trace_printk: TRACEPOINT: File path: /usr/lib/locale/locale-archive
+cat-87727   [000] ...21 105434.287462: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.287473: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.287474: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.287477: bpf_trace_printk: KPROBE: Allowed access to /usr/lib/locale/locale-archive for process cat
+cat-87727   [000] ...21 105434.287673: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.287675: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.287677: bpf_trace_printk: TRACEPOINT: File path: /etc/passwd
+cat-87727   [000] ...21 105434.287679: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.287683: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.287684: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.287688: bpf_trace_printk: KPROBE: Blocking access to /etc/passwd for process cat or its ancestor
+cat-87727   [000] ...21 105434.287766: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.287768: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.287769: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale/locale.alias
+cat-87727   [000] ...21 105434.287772: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.287775: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.287777: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.287779: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale/locale.alias for process cat
+cat-87727   [000] ...21 105434.287960: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.287964: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.287967: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale/en_US.UTF-8/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.287970: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.287977: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.287979: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.287983: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale/en_US.UTF-8/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288005: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288008: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288010: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale/en_US.utf8/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288013: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288018: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288019: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288023: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale/en_US.utf8/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288037: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288039: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288043: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale/en_US/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288045: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288050: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288052: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288055: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale/en_US/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288080: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288083: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288086: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale/en.UTF-8/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288089: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288093: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288095: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288099: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale/en.UTF-8/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288113: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288116: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288118: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale/en.utf8/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288121: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288126: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288128: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288138: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale/en.utf8/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288154: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288156: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288157: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale/en/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288159: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288162: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288163: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288165: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale/en/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288175: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288176: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288178: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale-langpack/en_US.UTF-8/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288180: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288182: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288183: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288185: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale-langpack/en_US.UTF-8/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288193: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288194: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288196: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale-langpack/en_US.utf8/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288197: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288199: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288201: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288203: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale-langpack/en_US.utf8/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288211: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288213: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288216: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale-langpack/en_US/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288219: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288223: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288224: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288227: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale-langpack/en_US/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288281: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288284: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288287: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale-langpack/en.UTF-8/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288290: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288297: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288298: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288302: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale-langpack/en.UTF-8/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288353: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288356: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288358: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale-langpack/en.utf8/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288361: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288366: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288367: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288372: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale-langpack/en.utf8/LC_MESSAGES/libc.mo for process cat
+cat-87727   [000] ...21 105434.288386: bpf_trace_printk: TRACEPOINT: Entered tracepoint_sys_enter_openat
+cat-87727   [000] ...21 105434.288388: bpf_trace_printk: TRACEPOINT: Process name: cat
+cat-87727   [000] ...21 105434.288390: bpf_trace_printk: TRACEPOINT: File path: /usr/share/locale-langpack/en/LC_MESSAGES/libc.mo
+cat-87727   [000] ...21 105434.288392: bpf_trace_printk: TRACEPOINT: PID: 87727, Parent PID: 16563
+cat-87727   [000] ...21 105434.288396: bpf_trace_printk: KPROBE: Entered kprobe__sys_openat
+cat-87727   [000] ...21 105434.288398: bpf_trace_printk: KPROBE: Process name: cat
+cat-87727   [000] ...21 105434.288401: bpf_trace_printk: KPROBE: Allowed access to /usr/share/locale-langpack/en/LC_MESSAGES/libc.mo for process cat

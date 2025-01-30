@@ -1,0 +1,46 @@
+{
+  "applications": [
+    {
+      "id": "1",
+      "name": "cat",
+      "path": "/usr/bin/cat",
+      "rules": [
+        {
+          "id": "1",
+          "description": "Bloquer l'accès au fichier des mots de passe système",
+          "pattern": "/etc/passwd",
+          "action": "block",
+          "enabled": true
+        },
+        {
+          "id": "2",
+          "description": "Bloquer l'accès aux hashes des mots de passe",
+          "pattern": "/etc/shadow",
+          "action": "block",
+          "enabled": true
+        },
+        {
+          "id": "3",
+          "description": "Empêcher la modification des logs de sécurité",
+          "pattern": "/var/log/auth.log",
+          "action": "block",
+          "enabled": true
+        },
+        {
+          "id": "4",
+          "description": "Interdire l'accès aux clés SSH privées",
+          "pattern": "~/.ssh/id_rsa",
+          "action": "block",
+          "enabled": true
+        },
+        {
+          "id": "5",
+          "description": "Bloquer la suppression des journaux système",
+          "pattern": "/var/log/syslog",
+          "action": "block",
+          "enabled": false
+        }
+      ]
+    }
+  ]
+}
