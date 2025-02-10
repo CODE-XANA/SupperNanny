@@ -1,0 +1,350 @@
+/* -------------------------- */
+/* Boutons Toggle             */
+/* -------------------------- */
+
+.toggle-button {
+    position: relative;
+    width: 50px;
+    height: 24px;
+    background-color: #ddd;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.toggle-button.active {
+    background-color: #4caf50;
+}
+
+.toggle-button-circle {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    background-color: white;
+    border-radius: 50%;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.2);
+    transition: transform 0.3s ease;
+    top: 2px;
+    left: 2px;
+}
+
+.toggle-button.active .toggle-button-circle {
+    transform: translateX(26px);
+}
+
+
+/* -------------------------- */
+/* Boutons Delete             */
+/* -------------------------- */
+
+.delete-button {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 25px;
+    height: 25px;
+    background-color: #e0e0e0;
+    color: #555;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color 0.3s, color 0.3s;
+}
+
+.delete-button:hover {
+    background-color: red;
+    color: white;
+}
+
+.delete-button:active {
+    background-color: darkred;
+}
+
+
+/* -------------------------- */
+/* Containeur Ajouter Règles  */
+/* -------------------------- */
+
+.add-rule-container {
+    display: flex;
+    align-items: center;
+    width: 70%;
+    justify-content: center;
+    gap: 10px;
+    margin: 20px auto;
+}
+
+.add-rule-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+.add-rule-button {
+    padding: 8px 16px;
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.2s, transform 0.2s;
+}
+
+.add-rule-button:hover {
+    background-color: #2980b9;
+    transform: scale(1.05);
+}
+
+.add-rule-button:active {
+    transform: translateY(0);
+}
+
+
+/* -------------------------- */
+/* Bontons Ajouter            */
+/* -------------------------- */
+
+.add-application-button {
+    flex-shrink: 0; /* Empêche les boutons de s'étirer */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 25px;
+    height: 25px;
+    border-radius: 50%;
+    border: 1px solid #ddd;
+    background-color: #e0e0e0;
+    box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s ease-in-out;
+}
+
+.add-application-button:hover {
+    background-color: #bdbdbd;
+    box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+
+/* -------------------------- */
+/* Bontons Refresh            */
+/* -------------------------- */
+
+.refresh-button {
+    flex-shrink: 0; /* Empêche les boutons de s'étirer */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 25px;
+    height: 25px;
+    border-radius: 50%;
+    border: 1px solid #ddd;
+    background-color: #e0e0e0;
+    box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s ease-in-out;
+}
+
+.refresh-button:hover {
+    background-color: #bdbdbd;
+    box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* -------------------------- */
+/* Modal                      */
+/* -------------------------- */
+
+.add-modal,
+.confirmation-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background-color: white;
+    padding: 25px;
+    border-radius: 12px;
+    width: 90%;
+    max-width: 400px;
+    text-align: center;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+    margin: 0 auto;
+}
+
+.modal-content h3 {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 15px;
+    color: #333;
+}
+
+.modal-content input {
+    margin-bottom: 15px;
+    width: calc(100% - 20px);
+    max-width: 360px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.modal-content input:focus {
+    border-color: #2980b9;
+    outline: none;
+}
+
+.modal-content button {
+    margin: 5px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s, transform 0.2s;
+}
+
+.modal-content button.add {
+    background-color: #2980b9;
+    color: white;
+}
+
+.modal-content button.add:hover {
+    background-color: #2575a7;
+    transform: scale(1.05);
+}
+
+.modal-content button.cancel {
+    background-color: #c0392b;
+    color: white;
+}
+
+.modal-content button.cancel:hover {
+    background-color: #a93226;
+    transform: scale(1.05);
+}
+
+
+/* -------------------------- */
+/* App                        */
+/* -------------------------- */
+
+.application-item {
+    cursor: pointer;
+    padding: 10px;
+    margin: 5px 0;
+    background-color: #f0f0f0;
+    border-radius: 5px;
+    transition: background-color 0.3s ease;
+}
+
+.application-item:hover {
+    background-color: #e0e0e0;
+}
+
+.application-item.active {
+    background-color: #d0d0d0;
+    font-weight: bold;
+}
+
+.delete-app-button {
+    background-color: #e53935;
+    color: white;
+    padding: 6px 12px;
+    font-size: 12px;
+    border: none;
+    border-radius: 3px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+}
+
+.delete-app-button:hover {
+    background-color: #c62828;
+    transform: scale(1.1);
+}
+
+
+/* -------------------------- */
+/* Pages Règles & Logs        */
+/* -------------------------- */
+
+.tab-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-start;
+    margin-bottom: 10px;
+}
+
+.tab-button {
+    background-color: #f4f4f4;
+    border: none;
+    padding: 10px 20px;
+    font-size: 16px;
+    font-weight: 500;
+    color: #555;
+    border-radius: 20px;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.tab-button:hover {
+    background-color: #eaeaea;
+}
+
+.tab-button.active {
+    background-color: #ddd;
+    color: #333;
+}
+
+.logs-container {
+    padding: 10px;
+}
+
+.log-card {
+    padding: 15px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background-color: #ffffff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s;
+}
+
+.log-card:hover {
+    transform: scale(1.01);
+}
+
+.log-card p {
+    margin: 0;
+    font-size: 14px;
+    color: #444;
+}
+
+.log-card .timestamp {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 5px;
+    display: block;
+}
