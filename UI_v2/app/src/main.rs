@@ -5,10 +5,8 @@ use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
 
-//
-// ===============================
-// Fonctions d'appel API (env files)
-// ===============================
+/* ==================== Fonctions d'appel API (env files) =================== */
+
 async fn fetch_env_files() -> Result<Vec<String>, reqwest::Error> {
     let client = reqwest::Client::new();
     let response = client
@@ -74,10 +72,13 @@ async fn create_env(
     Ok(())
 }
 
-//
-// ===============================
-// Fonctions d'appel API (script prompts)
-// ===============================
+
+/* ========================================================================== */
+
+
+
+/* ================= Fonctions d'appel API (script prompts) ================= */
+
 #[derive(Deserialize, Clone)]
 struct PendingPrompt {
     app: String,
@@ -107,10 +108,12 @@ async fn set_prompt_choice(app: &str, path: &str, choice: &str) -> Result<(), re
     Ok(())
 }
 
-//
-// ===============================
-// Composant Notification (Frontend)
-// ===============================
+/* ========================================================================== */
+
+
+
+/* ==================== Composant Notification (Frontend) =================== */
+
 fn Notification(cx: Scope) -> Element {
     let pending_prompts = use_state(&cx, || Vec::<PendingPrompt>::new());
 
@@ -188,10 +191,12 @@ fn Notification(cx: Scope) -> Element {
     })
 }
 
-//
-// ===============================
-// Application Frontend
-// ===============================
+/* ========================================================================== */
+
+
+
+/* ========================== Application Frontend ========================== */
+
 fn main() {
     let window_builder = WindowBuilder::new()
         .with_title("SuperNanny")
@@ -290,19 +295,34 @@ fn app(cx: Scope) -> Element {
         }
         div { class: "main-container",
             div { class: "left-column",
-                h2 { "Fichiers de règles" }
-                button {
-                    class: "submit-btn",
-                    onclick: move |_| {
-                        let env_files = env_files.clone();
-                        cx.spawn(async move {
-                            match fetch_env_files().await {
-                                Ok(files) => env_files.set(files),
-                                Err(e) => eprintln!("Erreur lors du fetch (refresh) : {:?}", e),
+                div {
+                    class: "left-header",
+                    style: "display: flex; align-items: center; gap: 8px;",
+                    h2 { "Fichiers de règles" }
+                    button {
+                        class: "refresh-btn",
+                        title: "Refresh",
+                        onclick: move |_| {
+                            let env_files = env_files.clone();
+                            cx.spawn(async move {
+                                match fetch_env_files().await {
+                                    Ok(files) => env_files.set(files),
+                                    Err(e) => eprintln!("Erreur lors du fetch (refresh) : {:?}", e),
+                                }
+                            });
+                        },
+                        rsx! {
+                            svg {
+                                xmlns: "http://www.w3.org/2000/svg",
+                                view_box: "0 0 24 24",
+                                width: "24",
+                                height: "24",
+                                path {
+                                    d: "M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6a5.99 5.99 0 0 1-5.2-3H4.35A8 8 0 0 0 12 20c4.41 0 8-3.59 8-8s-3.59-8-8-8z"
+                                }
                             }
-                        });
-                    },
-                    "Refresh"
+                        }
+                    }
                 }
                 ul {
                     env_files.get().iter().map(|file| {
@@ -357,167 +377,291 @@ fn app(cx: Scope) -> Element {
                     },
                     "Créer le fichier"
                 }
-                button {
-                    class: "submit-btn",
-                    onclick: move |_| {
-                        let program = new_program.get().clone();
-                        if program.is_empty() {
-                            eprintln!("Entrez un nom pour supprimer un fichier");
-                            return;
-                        }
-                        let env_files = env_files.clone();
-                        let selected_env = selected_env.clone();
-                        cx.spawn(async move {
-                            match delete_env(&program).await {
-                                Ok(_) => {
-                                    println!("Fichier supprimé");
-                                    match fetch_env_files().await {
-                                        Ok(files) => {
-                                            env_files.set(files);
-                                            if *selected_env.get() == program {
-                                                selected_env.set(String::new());
-                                            }
-                                        },
-                                        Err(e) => eprintln!("Erreur lors du fetch après suppression : {:?}", e),
-                                    }
-                                },
-                                Err(e) => eprintln!("Erreur lors de la suppression : {:?}", e),
-                            }
-                        });
-                    },
-                    "Supprimer le fichier (par nom)"
-                }
             }
             div { class: "middle-column",
-                (if !selected_env.get().is_empty() {
-                    rsx! {
-                        h2 { "Éditer: {selected_env}" }
-                        div { class: "section",
-                            h3 { "LL_FS_RO" }
-                            ul {
-                                ro_list.get().iter().enumerate().map(|(i, item)| {
-                                    let item = item.clone();
-                                    rsx! {
-                                        li {
-                                            "{item} "
-                                            button {
-                                                class: "delete-btn",
-                                                onclick: move |_| {
-                                                    let mut list = (*ro_list.get()).clone();
-                                                    list.remove(i);
-                                                    ro_list.set(list);
-                                                },
-                                                "x"
-                                            }
-                                        }
-                                    }
-                                })
-                            }
-                            input {
-                                placeholder: "Ajouter chemin (RO)",
-                                value: "{new_ro_item}",
-                                oninput: move |e| new_ro_item.set(e.value.clone())
-                            }
+            (if !selected_env.get().is_empty() {
+                rsx! {
+                    // Titre avec icônes
+                    h2 {
+                        style: "display: flex; justify-content: space-between; align-items: center;",
+                        // Titre à gauche
+                        span { "Éditer: {selected_env}" },
+                        // Icônes à droite
+                        div {
+                            class: "icon-container",
+                            // Bouton Refresh pour recharger les règles
                             button {
-                                class: "submit-btn",
+                                class: "icon-button refresh-rules-button",
+                                title: "Refresh",
                                 onclick: move |_| {
-                                    if !new_ro_item.get().is_empty() {
-                                        let mut list = (*ro_list.get()).clone();
-                                        list.push(new_ro_item.get().clone());
-                                        ro_list.set(list);
-                                        new_ro_item.set("".to_string());
-                                    }
-                                },
-                                "Ajouter"
-                            }
-                        }
-                        div { class: "section",
-                            h3 { "LL_FS_RW" }
-                            ul {
-                                rw_list.get().iter().enumerate().map(|(i, item)| {
-                                    let item = item.clone();
-                                    rsx! {
-                                        li {
-                                            "{item} "
-                                            button {
-                                                class: "delete-btn",
-                                                onclick: move |_| {
-                                                    let mut list = (*rw_list.get()).clone();
-                                                    list.remove(i);
-                                                    rw_list.set(list);
-                                                },
-                                                "x"
-                                            }
-                                        }
-                                    }
-                                })
-                            }
-                            input {
-                                placeholder: "Ajouter chemin (RW)",
-                                value: "{new_rw_item}",
-                                oninput: move |e| new_rw_item.set(e.value.clone())
-                            }
-                            button {
-                                class: "submit-btn",
-                                onclick: move |_| {
-                                    if !new_rw_item.get().is_empty() {
-                                        let mut list = (*rw_list.get()).clone();
-                                        list.push(new_rw_item.get().clone());
-                                        rw_list.set(list);
-                                        new_rw_item.set("".to_string());
-                                    }
-                                },
-                                "Ajouter"
-                            }
-                        }
-                        button {
-                            class: "submit-btn",
-                            onclick: move |_| {
-                                let program = selected_env.get().clone();
-                                let ro = ro_list.get().clone();
-                                let rw = rw_list.get().clone();
-                                let bind = tcp_bind.get().clone();
-                                let connect = tcp_connect.get().clone();
-                                cx.spawn(async move {
-                                    match update_env(&program, ro, rw, bind, connect).await {
-                                        Ok(_) => println!("Mise à jour réussie"),
-                                        Err(e) => eprintln!("Erreur lors de la mise à jour : {:?}", e),
-                                    }
-                                });
-                            },
-                            "Mettre à jour"
-                        }
-                        button {
-                            class: "submit-btn",
-                            onclick: move |_| {
-                                let program = selected_env.get().clone();
-                                let env_files = env_files.clone();
-                                let selected_env = selected_env.clone();
-                                cx.spawn(async move {
-                                    match delete_env(&program).await {
-                                        Ok(_) => {
-                                            println!("Fichier supprimé");
-                                            match fetch_env_files().await {
-                                                Ok(files) => {
-                                                    env_files.set(files);
-                                                    if *selected_env.get() == program {
-                                                        selected_env.set(String::new());
+                                    let ro_list = ro_list.clone();
+                                    let rw_list = rw_list.clone();
+                                    let tcp_bind = tcp_bind.clone();
+                                    let tcp_connect = tcp_connect.clone();
+                                    let program = selected_env.get().clone();
+                                    cx.spawn(async move {
+                                        if program.is_empty() { return; }
+                                        match fetch_env_content(&program).await {
+                                            Ok(content) => {
+                                                let mut ro = String::new();
+                                                let mut rw = String::new();
+                                                for line in content.lines() {
+                                                    if line.starts_with("export LL_FS_RO=") {
+                                                        if let Some(start) = line.find('"') {
+                                                            if let Some(end) = line[start + 1..].find('"') {
+                                                                ro = line[start + 1..start + 1 + end].to_string();
+                                                            }
+                                                        }
+                                                    } else if line.starts_with("export LL_FS_RW=") {
+                                                        if let Some(start) = line.find('"') {
+                                                            if let Some(end) = line[start + 1..].find('"') {
+                                                                rw = line[start + 1..start + 1 + end].to_string();
+                                                            }
+                                                        }
+                                                    } else if line.starts_with("export LL_TCP_BIND=") {
+                                                        if let Some(start) = line.find('"') {
+                                                            if let Some(end) = line[start + 1..].find('"') {
+                                                                tcp_bind.set(line[start + 1..start + 1 + end].to_string());
+                                                            }
+                                                        }
+                                                    } else if line.starts_with("export LL_TCP_CONNECT=") {
+                                                        if let Some(start) = line.find('"') {
+                                                            if let Some(end) = line[start + 1..].find('"') {
+                                                                tcp_connect.set(line[start + 1..start + 1 + end].to_string());
+                                                            }
+                                                        }
                                                     }
-                                                },
-                                                Err(e) => eprintln!("Erreur lors du fetch après suppression : {:?}", e),
+                                                }
+                                                ro_list.set(
+                                                    ro.split(':')
+                                                      .filter(|s| !s.is_empty())
+                                                      .map(|s| s.to_string())
+                                                      .collect()
+                                                );
+                                                rw_list.set(
+                                                    rw.split(':')
+                                                      .filter(|s| !s.is_empty())
+                                                      .map(|s| s.to_string())
+                                                      .collect()
+                                                );
                                             }
-                                        },
-                                        Err(e) => eprintln!("Erreur lors de la suppression : {:?}", e),
+                                            Err(e) => eprintln!("Erreur lors du fetch du contenu : {:?}", e),
+                                        }
+                                    });
+                                },
+                                rsx! {
+                                    svg {
+                                        xmlns: "http://www.w3.org/2000/svg",
+                                        view_box: "0 0 24 24",
+                                        width: "24",
+                                        height: "24",
+                                        path {
+                                            d: "M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6a5.99 5.99 0 0 1-5.2-3H4.35A8 8 0 0 0 12 20c4.41 0 8-3.59 8-8s-3.59-8-8-8z"
+                                        }
                                     }
-                                });
+                                }
+                            }
+                            // Bouton Check pour valider (mise à jour)
+                            button {
+                                class: "icon-button confirm-button",
+                                title: "Mettre à jour",
+                                onclick: move |_| {
+                                    let program = selected_env.get().clone();
+                                    let ro = ro_list.get().clone();
+                                    let rw = rw_list.get().clone();
+                                    let bind = tcp_bind.get().clone();
+                                    let connect = tcp_connect.get().clone();
+                                    cx.spawn(async move {
+                                        match update_env(&program, ro, rw, bind, connect).await {
+                                            Ok(_) => println!("Mise à jour réussie"),
+                                            Err(e) => eprintln!("Erreur lors de la mise à jour : {:?}", e),
+                                        }
+                                    });
+                                },
+                                rsx! {
+                                    svg {
+                                        xmlns: "http://www.w3.org/2000/svg",
+                                        view_box: "0 0 24 24",
+                                        width: "24",
+                                        height: "24",
+                                        path {
+                                            d: "M9 16.17l-4.17-4.17-1.42 1.41L9 19l10.59-10.59-1.42-1.41z"
+                                        }
+                                    }
+                                }
+                            }
+                            // Bouton Poubelle pour supprimer le fichier
+                            button {
+                                class: "icon-button delete-button",
+                                title: "Supprimer le fichier",
+                                onclick: move |_| {
+                                    let program = selected_env.get().clone();
+                                    let env_files = env_files.clone();
+                                    let selected_env = selected_env.clone();
+                                    cx.spawn(async move {
+                                        match delete_env(&program).await {
+                                            Ok(_) => {
+                                                println!("Fichier supprimé");
+                                                match fetch_env_files().await {
+                                                    Ok(files) => {
+                                                        env_files.set(files);
+                                                        if *selected_env.get() == program {
+                                                            selected_env.set(String::new());
+                                                        }
+                                                    },
+                                                    Err(e) => eprintln!("Erreur lors du fetch après suppression : {:?}", e),
+                                                }
+                                            },
+                                            Err(e) => eprintln!("Erreur lors de la suppression : {:?}", e),
+                                        }
+                                    });
+                                },
+                                rsx! {
+                                    svg {
+                                        xmlns: "http://www.w3.org/2000/svg",
+                                        view_box: "0 0 24 24",
+                                        width: "20",
+                                        height: "20",
+                                        path {
+                                            d: "M3 6l3 18h12l3-18H3zm18-2H3V2h5.5l1-1h5l1 1H21v2z"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }                    
+
+                    // Section LL_FS_RO
+                    div { class: "section",
+                        h3 { "LL_FS_RO" }
+                        ul {
+                            ro_list.get().iter().enumerate().map(|(i, item)| {
+                                let item = item.clone();
+                                rsx! {
+                                    li {
+                                        "{item} "
+                                        button {
+                                            class: "delete-btn",
+                                            onclick: move |_| {
+                                                let mut list = (*ro_list.get()).clone();
+                                                list.remove(i);
+                                                ro_list.set(list);
+                                            },
+                                            "x"
+                                        }
+                                    }
+                                }
+                            })
+                        }
+                        input {
+                            placeholder: "Ajouter chemin (RO)",
+                            value: "{new_ro_item}",
+                            oninput: move |e| new_ro_item.set(e.value.clone())
+                        }
+                        button {
+                            class: "submit-btn",
+                            onclick: move |_| {
+                                if !new_ro_item.get().is_empty() {
+                                    let mut list = (*ro_list.get()).clone();
+                                    list.push(new_ro_item.get().clone());
+                                    ro_list.set(list);
+                                    new_ro_item.set("".to_string());
+                                }
                             },
-                            "Supprimer le fichier"
+                            "Ajouter"
                         }
                     }
-                } else {
-                    rsx! { div { "Sélectionnez un fichier pour l'éditer" } }
-                })
-            }
+
+                    // Section LL_FS_RW
+                    div { class: "section",
+                        h3 { "LL_FS_RW" }
+                        ul {
+                            rw_list.get().iter().enumerate().map(|(i, item)| {
+                                let item = item.clone();
+                                rsx! {
+                                    li {
+                                        "{item} "
+                                        button {
+                                            class: "delete-btn",
+                                            onclick: move |_| {
+                                                let mut list = (*rw_list.get()).clone();
+                                                list.remove(i);
+                                                rw_list.set(list);
+                                            },
+                                            "x"
+                                        }
+                                    }
+                                }
+                            })
+                        }
+                        input {
+                            placeholder: "Ajouter chemin (RW)",
+                            value: "{new_rw_item}",
+                            oninput: move |e| new_rw_item.set(e.value.clone())
+                        }
+                        button {
+                            class: "submit-btn",
+                            onclick: move |_| {
+                                if !new_rw_item.get().is_empty() {
+                                    let mut list = (*rw_list.get()).clone();
+                                    list.push(new_rw_item.get().clone());
+                                    rw_list.set(list);
+                                    new_rw_item.set("".to_string());
+                                }
+                            },
+                            "Ajouter"
+                        }
+                    }
+
+                    // Boutons en bas (optionnels, si vous voulez les conserver)
+                    button {
+                        class: "submit-btn",
+                        onclick: move |_| {
+                            let program = selected_env.get().clone();
+                            let ro = ro_list.get().clone();
+                            let rw = rw_list.get().clone();
+                            let bind = tcp_bind.get().clone();
+                            let connect = tcp_connect.get().clone();
+                            cx.spawn(async move {
+                                match update_env(&program, ro, rw, bind, connect).await {
+                                    Ok(_) => println!("Mise à jour réussie"),
+                                    Err(e) => eprintln!("Erreur lors de la mise à jour : {:?}", e),
+                                }
+                            });
+                        },
+                        "Mettre à jour"
+                    }
+                    button {
+                        class: "del-btn",
+                        onclick: move |_| {
+                            let program = selected_env.get().clone();
+                            let env_files = env_files.clone();
+                            let selected_env = selected_env.clone();
+                            cx.spawn(async move {
+                                match delete_env(&program).await {
+                                    Ok(_) => {
+                                        println!("Fichier supprimé");
+                                        match fetch_env_files().await {
+                                            Ok(files) => {
+                                                env_files.set(files);
+                                                if *selected_env.get() == program {
+                                                    selected_env.set(String::new());
+                                                }
+                                            },
+                                            Err(e) => eprintln!("Erreur lors du fetch après suppression : {:?}", e),
+                                        }
+                                    },
+                                    Err(e) => eprintln!("Erreur lors de la suppression : {:?}", e),
+                                }
+                            });
+                        },
+                        "Supprimer le fichier"
+                    }
+                }
+            } else {
+                rsx! { div { "Sélectionnez un fichier pour l'éditer" } }
+            })
+        }
             div { class: "right-column",
                 h2 { "Résumé" }
                 (if !selected_env.get().is_empty() {
@@ -539,3 +683,5 @@ fn app(cx: Scope) -> Element {
         Notification {}
     })
 }
+
+/* ========================================================================== */

@@ -8,10 +8,9 @@ use std::time::{Duration, Instant};
 
 const ENV_DIR: &str = "/home/vmubuntu/Bureau/rust-landlock/application_conf";
 
-//
-// ===============================
-// Section 1 : Gestion des fichiers .env
-// ===============================
+
+/* ======================== Endpoints gestions .env ========================= */
+
 #[get("/envs")]
 async fn get_envs() -> impl Responder {
     let mut programs = Vec::new();
@@ -148,10 +147,12 @@ async fn delete_env(
     }
 }
 
-//
-// ===============================
-// Section 2 : Communication avec le script interactif
-// ===============================
+/* ========================================================================== */
+
+
+
+/* ===================== Endpoints communication script ===================== */
+
 #[derive(Serialize, Deserialize, Clone)]
 struct ScriptPrompt {
     app: String,
@@ -172,7 +173,7 @@ struct ScriptAnswer {
 }
 
 // État partagé pour stocker les choix pour chaque (app, path)
-// et mémoriser le dernier instant où un log a été affiché.
+// et mémoriser le dernier instant où un log a été affiché
 struct ScriptState {
     choices: Mutex<HashMap<(String, String), String>>,
     last_log: Mutex<HashMap<(String, String), Instant>>,
@@ -187,7 +188,7 @@ impl ScriptState {
     }
 }
 
-/// Endpoint pour recevoir le prompt du script.
+/// Endpoint pour recevoir le prompt du script
 #[post("/script_prompt")]
 async fn script_prompt(
     data: web::Json<ScriptPrompt>,
@@ -204,8 +205,8 @@ async fn script_prompt(
     HttpResponse::Ok().body("Prompt enregistré")
 }
 
-/// Endpoint pour que le script récupère le choix.
-/// On affiche le log une fois toutes les 20 secondes pour éviter le spam.
+/// Endpoint pour que le script récupère le choix
+/// On affiche le log une fois toutes les 20 secondes pour éviter le spam
 #[get("/get_choice")]
 async fn get_choice(
     query: web::Query<ScriptQuery>,
@@ -232,7 +233,7 @@ async fn get_choice(
     HttpResponse::Ok().body(choice)
 }
 
-/// Endpoint pour que le frontend définisse le choix.
+/// Endpoint pour que le frontend définisse le choix
 #[post("/set_choice")]
 async fn set_choice(
     data: web::Json<ScriptAnswer>,
@@ -249,7 +250,7 @@ async fn set_choice(
     HttpResponse::Ok().body("Réponse enregistrée")
 }
 
-/// Endpoint pour renvoyer les prompts en attente (pour lesquels la réponse est vide).
+/// Endpoint pour renvoyer les prompts en attente (pour lesquels la réponse est vide)
 #[get("/pending_prompts")]
 async fn pending_prompts(state: web::Data<ScriptState>) -> impl Responder {
     let map = state.choices.lock().unwrap();
@@ -264,10 +265,12 @@ async fn pending_prompts(state: web::Data<ScriptState>) -> impl Responder {
     HttpResponse::Ok().json(pending)
 }
 
-//
-// ===============================
-// Main du backend
-// ===============================
+/* ========================================================================== */
+
+
+
+/* ================================== Main ================================== */
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let script_state = web::Data::new(ScriptState::new());
@@ -288,3 +291,5 @@ async fn main() -> std::io::Result<()> {
     .run()
     .await
 }
+
+/* ========================================================================== */
