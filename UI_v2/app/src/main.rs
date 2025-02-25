@@ -1,39 +1,220 @@
 use dioxus::prelude::*;
 use dioxus_desktop::{Config, LogicalSize, launch_with_props, WindowBuilder};
 use reqwest;
+use serde::Deserialize;
 use serde_json::json;
+use std::time::Duration;
 
+//
+// ===============================
+// Fonctions d'appel API (env files)
+// ===============================
+async fn fetch_env_files() -> Result<Vec<String>, reqwest::Error> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get("http://127.0.0.1:8080/envs")
+        .send()
+        .await?
+        .error_for_status()?;
+    let files: Vec<String> = response.json().await?;
+    Ok(files)
+}
+
+async fn fetch_env_content(program: &str) -> Result<String, reqwest::Error> {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:8080/env/{}", program);
+    let response = client.get(&url).send().await?.error_for_status()?;
+    let content = response.text().await?;
+    Ok(content)
+}
+
+async fn update_env(
+    program: &str,
+    ro: Vec<String>,
+    rw: Vec<String>,
+    tcp_bind: String,
+    tcp_connect: String,
+) -> Result<(), reqwest::Error> {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:8080/env/{}", program);
+    let payload = json!({
+        "ll_fs_ro": ro,
+        "ll_fs_rw": rw,
+        "ll_tcp_bind": tcp_bind,
+        "ll_tcp_connect": tcp_connect,
+    });
+    client.put(&url).json(&payload).send().await?.error_for_status()?;
+    Ok(())
+}
+
+async fn delete_env(program: &str) -> Result<(), reqwest::Error> {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:8080/env/{}", program);
+    client.delete(&url).send().await?.error_for_status()?;
+    Ok(())
+}
+
+async fn create_env(
+    program: &str,
+    ll_fs_ro: String,
+    ll_fs_rw: String,
+    tcp_bind: String,
+    tcp_connect: String,
+) -> Result<(), reqwest::Error> {
+    let client = reqwest::Client::new();
+    let url = "http://127.0.0.1:8080/env";
+    let payload = json!({
+        "program": program,
+        "ll_fs_ro": ll_fs_ro,
+        "ll_fs_rw": ll_fs_rw,
+        "ll_tcp_bind": tcp_bind,
+        "ll_tcp_connect": tcp_connect,
+    });
+    client.post(url).json(&payload).send().await?.error_for_status()?;
+    Ok(())
+}
+
+//
+// ===============================
+// Fonctions d'appel API (script prompts)
+// ===============================
+#[derive(Deserialize, Clone)]
+struct PendingPrompt {
+    app: String,
+    path: String,
+}
+
+async fn fetch_pending_prompts() -> Result<Vec<PendingPrompt>, reqwest::Error> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get("http://127.0.0.1:8080/pending_prompts")
+        .send()
+        .await?
+        .error_for_status()?;
+    let prompts: Vec<PendingPrompt> = response.json().await?;
+    Ok(prompts)
+}
+
+async fn set_prompt_choice(app: &str, path: &str, choice: &str) -> Result<(), reqwest::Error> {
+    let client = reqwest::Client::new();
+    let url = "http://127.0.0.1:8080/set_choice";
+    let payload = json!({
+        "app": app,
+        "path": path,
+        "choice": choice,
+    });
+    client.post(url).json(&payload).send().await?.error_for_status()?;
+    Ok(())
+}
+
+//
+// ===============================
+// Composant Notification (Frontend)
+// ===============================
+fn Notification(cx: Scope) -> Element {
+    let pending_prompts = use_state(&cx, || Vec::<PendingPrompt>::new());
+
+    // Polling toutes les 5 secondes pour récupérer les prompts en attente.
+    use_future(&cx, (), |_| {
+        let pending_prompts = pending_prompts.clone();
+        async move {
+            loop {
+                match fetch_pending_prompts().await {
+                    Ok(prompts) => pending_prompts.set(prompts),
+                    Err(e) => eprintln!("Erreur lors du fetch des prompts: {:?}", e),
+                }
+                async_std::task::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    });
+
+    cx.render(rsx! {
+        div {
+            class: "notification-container",
+            style: "position: fixed; bottom: 20px; right: 20px; z-index: 1000;",
+            pending_prompts.get().iter().map(|p| {
+                rsx! {
+                    div {
+                        class: "notification",
+                        style: "background-color: #fff; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);",
+                        p { "App: {p.app}" }
+                        p { "Path: {p.path}" }
+                        div {
+                            style: "display: flex; gap: 10px; margin-top: 10px;",
+                            button {
+                                class: "submit-btn",
+                                onclick: move |_| {
+                                    let app_clone = p.app.clone();
+                                    let path_clone = p.path.clone();
+                                    cx.spawn(async move {
+                                        if let Err(e) = set_prompt_choice(&app_clone, &path_clone, "r").await {
+                                            eprintln!("Erreur lors du set_choice: {:?}", e);
+                                        }
+                                    });
+                                },
+                                "Read-only (r)"
+                            }
+                            button {
+                                class: "submit-btn",
+                                onclick: move |_| {
+                                    let app_clone = p.app.clone();
+                                    let path_clone = p.path.clone();
+                                    cx.spawn(async move {
+                                        if let Err(e) = set_prompt_choice(&app_clone, &path_clone, "w").await {
+                                            eprintln!("Erreur lors du set_choice: {:?}", e);
+                                        }
+                                    });
+                                },
+                                "Writable (w)"
+                            }
+                            button {
+                                class: "submit-btn",
+                                onclick: move |_| {
+                                    let app_clone = p.app.clone();
+                                    let path_clone = p.path.clone();
+                                    cx.spawn(async move {
+                                        if let Err(e) = set_prompt_choice(&app_clone, &path_clone, "s").await {
+                                            eprintln!("Erreur lors du set_choice: {:?}", e);
+                                        }
+                                    });
+                                },
+                                "Skip (s)"
+                            }
+                        }
+                    }
+                }
+            })
+        }
+    })
+}
+
+//
+// ===============================
+// Application Frontend
+// ===============================
 fn main() {
     let window_builder = WindowBuilder::new()
         .with_title("SuperNanny")
         .with_inner_size(LogicalSize::new(1000.0, 700.0));
-
     let config = Config::new()
         .with_window(window_builder)
         .with_resource_directory("assets");
-
     launch_with_props(app, (), config);
 }
 
 fn app(cx: Scope) -> Element {
-    // États pour la gestion des fichiers .env et autres données
     let env_files = use_state(&cx, || Vec::<String>::new());
     let selected_env = use_state(&cx, || String::new());
-
     let ro_list = use_state(&cx, || Vec::<String>::new());
     let rw_list = use_state(&cx, || Vec::<String>::new());
-
     let new_ro_item = use_state(&cx, || String::new());
     let new_rw_item = use_state(&cx, || String::new());
-
     let tcp_bind = use_state(&cx, || "9418".to_string());
     let tcp_connect = use_state(&cx, || "80:443".to_string());
-
     let new_program = use_state(&cx, || String::new());
     let new_program_ro = use_state(&cx, || String::new());
     let new_program_rw = use_state(&cx, || String::new());
 
-    // Charger la liste des fichiers au montage
     use_future(&cx, (), |_| {
         let env_files = env_files.clone();
         async move {
@@ -44,7 +225,6 @@ fn app(cx: Scope) -> Element {
         }
     });
 
-    // Charger le contenu du fichier lorsque la sélection change
     use_effect(&cx, selected_env.get(), move |program| {
         let ro_list = ro_list.clone();
         let rw_list = rw_list.clone();
@@ -109,7 +289,6 @@ fn app(cx: Scope) -> Element {
             href: "assets/styles.css",
         }
         div { class: "main-container",
-            // Colonne de gauche : liste des fichiers, refresh, création et suppression
             div { class: "left-column",
                 h2 { "Fichiers de règles" }
                 button {
@@ -167,7 +346,6 @@ fn app(cx: Scope) -> Element {
                             match create_env(&program, ro, rw, bind, connect).await {
                                 Ok(_) => {
                                     println!("Fichier créé");
-                                    // Recharger la liste après création
                                     match fetch_env_files().await {
                                         Ok(files) => env_files.set(files),
                                         Err(e) => eprintln!("Erreur lors du fetch après création : {:?}", e),
@@ -210,7 +388,6 @@ fn app(cx: Scope) -> Element {
                     "Supprimer le fichier (par nom)"
                 }
             }
-            // Colonne centrale : édition du fichier sélectionné
             div { class: "middle-column",
                 (if !selected_env.get().is_empty() {
                     rsx! {
@@ -341,7 +518,6 @@ fn app(cx: Scope) -> Element {
                     rsx! { div { "Sélectionnez un fichier pour l'éditer" } }
                 })
             }
-            // Colonne de droite : résumé des informations
             div { class: "right-column",
                 h2 { "Résumé" }
                 (if !selected_env.get().is_empty() {
@@ -359,72 +535,7 @@ fn app(cx: Scope) -> Element {
                 })
             }
         }
+        // Zone de notification pour les prompts du script
+        Notification {}
     })
-}
-
-// ----- Fonctions d'appel API -----
-
-async fn fetch_env_files() -> Result<Vec<String>, reqwest::Error> {
-    let client = reqwest::Client::new();
-    let response = client
-        .get("http://127.0.0.1:8080/envs")
-        .send()
-        .await?
-        .error_for_status()?;
-    let files: Vec<String> = response.json().await?;
-    Ok(files)
-}
-
-async fn fetch_env_content(program: &str) -> Result<String, reqwest::Error> {
-    let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:8080/env/{}", program);
-    let response = client.get(&url).send().await?.error_for_status()?;
-    let content = response.text().await?;
-    Ok(content)
-}
-
-async fn update_env(
-    program: &str,
-    ro: Vec<String>,
-    rw: Vec<String>,
-    tcp_bind: String,
-    tcp_connect: String,
-) -> Result<(), reqwest::Error> {
-    let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:8080/env/{}", program);
-    let payload = json!({
-        "ll_fs_ro": ro,
-        "ll_fs_rw": rw,
-        "ll_tcp_bind": tcp_bind,
-        "ll_tcp_connect": tcp_connect,
-    });
-    client.put(&url).json(&payload).send().await?.error_for_status()?;
-    Ok(())
-}
-
-async fn delete_env(program: &str) -> Result<(), reqwest::Error> {
-    let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:8080/env/{}", program);
-    client.delete(&url).send().await?.error_for_status()?;
-    Ok(())
-}
-
-async fn create_env(
-    program: &str,
-    ll_fs_ro: String,
-    ll_fs_rw: String,
-    tcp_bind: String,
-    tcp_connect: String,
-) -> Result<(), reqwest::Error> {
-    let client = reqwest::Client::new();
-    let url = "http://127.0.0.1:8080/env";
-    let payload = json!({
-        "program": program,
-        "ll_fs_ro": ll_fs_ro,
-        "ll_fs_rw": ll_fs_rw,
-        "ll_tcp_bind": tcp_bind,
-        "ll_tcp_connect": tcp_connect,
-    });
-    client.post(url).json(&payload).send().await?.error_for_status()?;
-    Ok(())
 }
