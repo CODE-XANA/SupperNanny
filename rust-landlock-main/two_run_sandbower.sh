@@ -6,7 +6,8 @@
 # 2) Load or create a separate rules.<app>.env in application_conf/ for that application
 # 3) First run with those rules
 # 4) Parse strace logs for EACCES/EPERM (ignore ENOENT)
-# 5) Prompt user to update rules (storing *absolute* paths)
+# 5) Prompt user to update rules (storing *absolute*, verified paths)
+#    - We reject symlinks and paths that don't exist, to avoid malicious expansions
 # 6) If needed, do a second run
 # 7) Persist changes in that app’s file
 #
@@ -22,7 +23,7 @@ if [ $# -lt 1 ]; then
 fi
 
 APP_CMD="$(basename "$1")"
-shift  # Now $@ are the arguments to that application
+shift  # Now $@ = application arguments
 
 ########################################
 # 1) Directory to store rules.*.env files
@@ -100,8 +101,7 @@ echo "========================================"
 DENIED_LINES="$(
   grep -EH ' = -[0-9]+ (EACCES|EPERM)' "$LOG_PREFIX".* 2>/dev/null \
     | grep -v ' = -2 ENOENT' \
-    | grep -v '(No such file or directory)' \
-    || true
+    | grep -v '(No such file or directory)'
 )"
 
 if [ -z "$DENIED_LINES" ]; then
@@ -113,27 +113,42 @@ else
   NEW_RW=""
   PROMPTED_PATHS=""
 
+  # We'll parse each line that matched EACCES/EPERM
   while IFS= read -r line; do
-    # Extract the raw path from quotes
+    # Extract the raw path in quotes
     raw_path="$(echo "$line" | sed -nE 's/.*"([^"]+)".*/\1/p')"
     [ -z "$raw_path" ] && continue
 
-    # Convert to absolute, ignoring errors
-    # realpath -m handles relative path + symlinks
+    ############################################################
+    # Convert to absolute path, disallow symlinks & must exist #
+    ############################################################
     abs_path="$(realpath -m "$raw_path" 2>/dev/null || true)"
     if [ -z "$abs_path" ]; then
       echo "Could not resolve an absolute path for '$raw_path'; skipping."
       continue
     fi
 
-    # Already prompted?
+    # Check if file or directory actually exists
+    if [ ! -e "$abs_path" ]; then
+      echo "Path '$abs_path' does not exist on the filesystem; skipping."
+      continue
+    fi
+
+    # Disallow symlinks to avoid malicious expansions
+    # You can also skip if test -h or test -L
+    if [ -L "$abs_path" ]; then
+      echo "Path '$abs_path' is a symlink; skipping for security reasons."
+      continue
+    fi
+
+    # Already prompted for this absolute path?
     if echo "$PROMPTED_PATHS" | grep -Fqx "$abs_path"; then
       continue
     fi
     PROMPTED_PATHS="$PROMPTED_PATHS
 $abs_path"
 
-    # Skip if path is already in LL_FS_RO or LL_FS_RW
+    # If path is already in LL_FS_RO or LL_FS_RW, skip
     if echo "$LL_FS_RO" | grep -Fq "$abs_path" || echo "$LL_FS_RW" | grep -Fq "$abs_path"; then
       continue
     fi
@@ -149,10 +164,10 @@ $abs_path"
         NEW_RW="$NEW_RW:$abs_path"
         ;;
       *)
-        echo "Skipping $abs_path"
+        echo "Skipping '$abs_path'"
         ;;
     esac
-  done <<< "$(printf '%s\n' "$DENIED_LINES")"
+  done <<< "$DENIED_LINES"
 
   # Append newly chosen absolute paths to environment
   if [ -n "$NEW_RO" ]; then
@@ -184,8 +199,7 @@ $abs_path"
   DENIED_LINES_SECOND="$(
     grep -EH ' = -[0-9]+ (EACCES|EPERM)' "$LOG_PREFIX".* 2>/dev/null \
       | grep -v ' = -2 ENOENT' \
-      | grep -v '(No such file or directory)' \
-      || true
+      | grep -v '(No such file or directory)'
   )"
 
   if [ -z "$DENIED_LINES_SECOND" ]; then
