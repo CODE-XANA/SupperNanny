@@ -95,6 +95,7 @@ async fn create_env(
     Ok(())
 }
 
+
 /* ==================== Fonctions d'appel API (script prompts) ==================== */
 
 #[derive(Deserialize, Clone)]
@@ -227,6 +228,7 @@ fn main() {
 }
 
 fn app(cx: Scope) -> Element {
+    // États pour les configurations (règles)
     let env_files = use_state(&cx, || Vec::<AppPolicy>::new());
     let selected_env = use_state(&cx, || String::new());
     let ro_list = use_state(&cx, || Vec::<String>::new());
@@ -236,7 +238,12 @@ fn app(cx: Scope) -> Element {
     let new_program = use_state(&cx, || String::new());
     let new_program_ro = use_state(&cx, || String::new());
     let new_program_rw = use_state(&cx, || String::new());
+    // Nouveaux états pour ajouter individuellement un chemin dans l'onglet Rules
+    let new_ro_item = use_state(&cx, || String::new());
+    let new_rw_item = use_state(&cx, || String::new());
+    // Onglet sélectionné: "rules" ou "events"
     let selected_tab = use_state(&cx, || "rules".to_string());
+    // États pour les events
     let events = use_state(&cx, || Vec::<SandboxEvent>::new());
 
     // Récupérer la liste des configurations via l'API
@@ -245,7 +252,7 @@ fn app(cx: Scope) -> Element {
         async move {
             match fetch_env_files().await {
                 Ok(policies) => env_files.set(policies),
-                Err(e) => eprintln!("Erreur lors du fetch des fichiers : {:?}", e),
+                Err(e) => eprintln!("Erreur lors du fetch des configurations : {:?}", e),
             }
         }
     });
@@ -262,14 +269,22 @@ fn app(cx: Scope) -> Element {
             }
             match fetch_env_content(&program).await {
                 Ok(policy) => {
-                    ro_list.set(policy.default_ro.split(':')
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                        .collect());
-                    rw_list.set(policy.default_rw.split(':')
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                        .collect());
+                    ro_list.set(
+                        policy
+                            .default_ro
+                            .split(':')
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .collect(),
+                    );
+                    rw_list.set(
+                        policy
+                            .default_rw
+                            .split(':')
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .collect(),
+                    );
                     tcp_bind.set(policy.tcp_bind);
                     tcp_connect.set(policy.tcp_connect);
                 }
@@ -295,6 +310,7 @@ fn app(cx: Scope) -> Element {
     cx.render(rsx! {
         link { rel: "stylesheet", href: "assets/styles.css" }
         div { class: "main-container",
+            // Colonne de gauche : liste des configurations et création
             div { class: "left-column",
                 div {
                     class: "left-header",
@@ -378,6 +394,7 @@ fn app(cx: Scope) -> Element {
                     "Créer la configuration"
                 }
             }
+            // Colonne du milieu : onglets "Rules" et "Events"
             div { class: "middle-column",
                 div {
                     style: "display: flex; gap: 10px; margin-bottom: 20px;",
@@ -400,6 +417,7 @@ fn app(cx: Scope) -> Element {
                                 span { "Éditer: {selected_env}" },
                                 div {
                                     class: "icon-container",
+                                    // Bouton Refresh pour recharger les règles
                                     button {
                                         class: "icon-button refresh-rules-button",
                                         title: "Refresh",
@@ -438,8 +456,72 @@ fn app(cx: Scope) -> Element {
                                             }
                                         }
                                     }
+                                    // Bouton Update pour envoyer la mise à jour
+                                    button {
+                                        class: "icon-button confirm-button",
+                                        title: "Mettre à jour",
+                                        onclick: move |_| {
+                                            let program = selected_env.get().clone();
+                                            let ro = ro_list.get().clone();
+                                            let rw = rw_list.get().clone();
+                                            let bind = tcp_bind.get().clone();
+                                            let connect = tcp_connect.get().clone();
+                                            cx.spawn(async move {
+                                                match update_env(&program, ro, rw, bind, connect).await {
+                                                    Ok(_) => println!("Mise à jour réussie"),
+                                                    Err(e) => eprintln!("Erreur lors de la mise à jour : {:?}", e),
+                                                }
+                                            });
+                                        },
+                                        rsx! {
+                                            svg {
+                                                xmlns: "http://www.w3.org/2000/svg",
+                                                view_box: "0 0 24 24",
+                                                width: "24",
+                                                height: "24",
+                                                path { d: "M9 16.17l-4.17-4.17-1.42 1.41L9 19l10.59-10.59-1.42-1.41z" }
+                                            }
+                                        }
+                                    }
+                                    // Bouton Delete pour supprimer la configuration
+                                    button {
+                                        class: "icon-button delete-button",
+                                        title: "Supprimer la configuration",
+                                        onclick: move |_| {
+                                            let program = selected_env.get().clone();
+                                            let env_files = env_files.clone();
+                                            let selected_env = selected_env.clone();
+                                            cx.spawn(async move {
+                                                match delete_env(&program).await {
+                                                    Ok(_) => {
+                                                        println!("Configuration supprimée");
+                                                        match fetch_env_files().await {
+                                                            Ok(policies) => {
+                                                                env_files.set(policies);
+                                                                if *selected_env.get() == program {
+                                                                    selected_env.set(String::new());
+                                                                }
+                                                            },
+                                                            Err(e) => eprintln!("Erreur lors du fetch après suppression : {:?}", e),
+                                                        }
+                                                    },
+                                                    Err(e) => eprintln!("Erreur lors de la suppression : {:?}", e),
+                                                }
+                                            });
+                                        },
+                                        rsx! {
+                                            svg {
+                                                xmlns: "http://www.w3.org/2000/svg",
+                                                view_box: "0 0 24 24",
+                                                width: "24",
+                                                height: "24",
+                                                path { d: "M3 6l3 18h12l3-18H3zm18-2H3V2h5.5l1-1h5l1 1H21v2z" }
+                                            }
+                                        }
+                                    }
                                 }
                             }
+                            // Section pour LL_FS_RO
                             div { class: "section",
                                 h3 { "LL_FS_RO" }
                                 ul {
@@ -461,7 +543,28 @@ fn app(cx: Scope) -> Element {
                                         }
                                     })
                                 }
+                                div {
+                                    class: "add-path",
+                                    input {
+                                        placeholder: "Ajouter chemin RO",
+                                        value: "{new_ro_item}",
+                                        oninput: move |e| new_ro_item.set(e.value.clone())
+                                    }
+                                    button {
+                                        class: "submit-btn",
+                                        onclick: move |_| {
+                                            if !new_ro_item.get().is_empty() {
+                                                let mut list = (*ro_list.get()).clone();
+                                                list.push(new_ro_item.get().clone());
+                                                ro_list.set(list);
+                                                new_ro_item.set("".to_string());
+                                            }
+                                        },
+                                        "Ajouter RO"
+                                    }
+                                }
                             }
+                            // Section pour LL_FS_RW
                             div { class: "section",
                                 h3 { "LL_FS_RW" }
                                 ul {
@@ -482,6 +585,26 @@ fn app(cx: Scope) -> Element {
                                             }
                                         }
                                     })
+                                }
+                                div {
+                                    class: "add-path",
+                                    input {
+                                        placeholder: "Ajouter chemin RW",
+                                        value: "{new_rw_item}",
+                                        oninput: move |e| new_rw_item.set(e.value.clone())
+                                    }
+                                    button {
+                                        class: "submit-btn",
+                                        onclick: move |_| {
+                                            if !new_rw_item.get().is_empty() {
+                                                let mut list = (*rw_list.get()).clone();
+                                                list.push(new_rw_item.get().clone());
+                                                rw_list.set(list);
+                                                new_rw_item.set("".to_string());
+                                            }
+                                        },
+                                        "Ajouter RW"
+                                    }
                                 }
                             }
                         },
@@ -508,6 +631,7 @@ fn app(cx: Scope) -> Element {
                     rsx! { div { "Sélectionnez une configuration pour l'éditer" } }
                 })
             }
+            // Colonne de droite : résumé de la configuration
             div { class: "right-column",
                 h2 { "Résumé" }
                 (if !selected_env.get().is_empty() {
@@ -528,3 +652,4 @@ fn app(cx: Scope) -> Element {
         Notification {}
     })
 }
+

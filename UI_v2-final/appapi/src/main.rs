@@ -24,6 +24,16 @@ pub struct AppPolicy {
     pub updated_at: NaiveDateTime,
 }
 
+#[derive(Insertable, Deserialize)]
+#[diesel(table_name = schema::app_policy)]
+pub struct NewAppPolicy {
+    pub app_name: String,
+    pub default_ro: String,
+    pub default_rw: String,
+    pub tcp_bind: String,
+    pub tcp_connect: String,
+}
+
 #[derive(Queryable, Serialize, Deserialize)]
 #[diesel(table_name = schema::sandbox_events)]
 pub struct SandboxEvent {
@@ -74,7 +84,7 @@ async fn get_env_content(
 #[post("/env")]
 async fn create_env(
     pool: web::Data<DbPool>,
-    data: web::Json<AppPolicy>,
+    data: web::Json<NewAppPolicy>,
 ) -> impl Responder {
     use crate::schema::app_policy::dsl::*;
     let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
@@ -90,6 +100,7 @@ async fn create_env(
                         .body(format!("Erreur lors de l'ajout : {}", err)),
     }
 }
+
 
 // Structure pour la mise à jour : les champs "ll_fs_ro" et "ll_fs_rw" sont transmis en vecteur.
 #[derive(Deserialize)]
