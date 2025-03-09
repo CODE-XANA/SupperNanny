@@ -1,12 +1,10 @@
 [package]
-name = "landlock"
-version = "0.4.1"
+name = "supernanny_sandboxer"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.63"
-description = "Landlock LSM helpers"
-homepage = "https://landlock.io"
-repository = "https://github.com/landlock-lsm/rust-landlock"
-license = "MIT OR Apache-2.0"
+description = "Master Project SuperNanny"
+license = "ISEN Yncréa Méditérannée"
 keywords = ["access-control", "linux", "sandbox", "security"]
 categories = ["api-bindings", "os::linux-apis", "virtualization", "filesystem"]
 exclude = [".gitignore"]
@@ -16,6 +14,13 @@ readme = "README.md"
 enumflags2 = "0.7"
 libc = "0.2.133"
 thiserror = "2.0"
+anyhow = "1.0.97"
+regex = "1.11.1"
+hostname = "0.4.0"
+dialoguer = "0.11.0"
+postgres = "0.19.10"
+landlock = "0.4.1"
+
 
 [dev-dependencies]
 anyhow = "1.0"
