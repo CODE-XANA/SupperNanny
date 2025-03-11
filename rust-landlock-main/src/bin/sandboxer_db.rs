@@ -37,7 +37,6 @@ impl AppPolicy {
             tcp_connect: "80:443".split(':').filter_map(|s| s.parse::<u16>().ok()).collect(),
         }
     }
-    
 
     fn contains_path(&self, path: &Path) -> bool {
         self.ro_paths.contains(path) || self.rw_paths.contains(path)
@@ -132,32 +131,49 @@ fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
         .handle_access(AccessNet::BindTcp)?
         .handle_access(AccessNet::ConnectTcp)?;
     let mut created = base.create()?;
+
     for path in &policy.ro_paths {
-        let canonical_path = fs::canonicalize(path)
-            .context(format!("Failed to canonicalize RO path: {:?}", path))?;
-        let fd = PathFd::new(canonical_path.as_os_str())?;
-        let rule = PathBeneath::new(fd, AccessFs::from_read(abi));
-        created = created.add_rule(rule)?;
+        match fs::canonicalize(path) {
+            Ok(canonical_path) => {
+                let fd = PathFd::new(canonical_path.as_os_str())?;
+                let rule = PathBeneath::new(fd, AccessFs::from_read(abi));
+                created = created.add_rule(rule)?;
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to canonicalize RO path: {:?}. Error: {}", path, e);
+            }
+        }
     }
+
     for path in &policy.rw_paths {
-        let canonical_path = fs::canonicalize(path)
-            .context(format!("Failed to canonicalize RW path: {:?}", path))?;
-        let fd = PathFd::new(canonical_path.as_os_str())?;
-        let rule = PathBeneath::new(fd, AccessFs::from_all(abi));
-        created = created.add_rule(rule)?;
+        match fs::canonicalize(path) {
+            Ok(canonical_path) => {
+                let fd = PathFd::new(canonical_path.as_os_str())?;
+                let rule = PathBeneath::new(fd, AccessFs::from_all(abi));
+                created = created.add_rule(rule)?;
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to canonicalize RW path: {:?}. Error: {}", path, e);
+            }
+        }
     }
+
     for port in &policy.tcp_bind {
         let rule = NetPort::new(*port, AccessNet::BindTcp);
         created = created.add_rule(rule)?;
     }
+
     for port in &policy.tcp_connect {
         let rule = NetPort::new(*port, AccessNet::ConnectTcp);
         created = created.add_rule(rule)?;
     }
+
     let status = created.restrict_self()?;
     if status.ruleset == RulesetStatus::NotEnforced {
         return Err(anyhow!("Landlock is not supported by the running kernel"));
     }
+
+    println!("Landlock ruleset enforced successfully.");
     Ok(())
 }
 
@@ -248,7 +264,6 @@ fn parse_denied_lines(log_file: &str) -> Result<HashSet<PathBuf>> {
     Ok(denials)
 }
 
-
 fn process_denials(log_file: &str, policy: &mut AppPolicy, app: &str) -> Result<bool> {
     let denied_paths = parse_denied_lines(log_file)?;
 
@@ -257,7 +272,7 @@ fn process_denials(log_file: &str, policy: &mut AppPolicy, app: &str) -> Result<
         if policy.contains_path(&path) || is_symlink(&path) {
             continue;
         }
-        let choices = &["Read-Only", "Read-Write", "Skip"];
+        let choices = &["Read-Only", "Read-Write", "Deny"];
         let selection = Select::new()
             .with_prompt(format!("Access denied for {}. Allow as:", path.display()))
             .items(choices)
@@ -275,13 +290,12 @@ fn process_denials(log_file: &str, policy: &mut AppPolicy, app: &str) -> Result<
                 updated = true;
             }
             _ => {
-                log_event(app, &path, "syscall", "skipped")?;
+                log_event(app, &path, "syscall", "denied")?;
             }
         }
     }
     Ok(updated)
 }
-
 
 fn is_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path)
