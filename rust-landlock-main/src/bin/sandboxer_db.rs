@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use dialoguer::{Select,Confirm};
+use dialoguer::{Select, Confirm};
 use landlock::{
     Access, AccessFs, AccessNet, ABI, NetPort, PathBeneath, PathFd, Ruleset, RulesetStatus,
     RulesetAttr, RulesetCreatedAttr,
@@ -13,6 +13,10 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use hostname::get as get_hostname_raw;
+
+// -----------------------------------------------------------------------
+// Production code begins here.
+// -----------------------------------------------------------------------
 
 #[derive(Debug)]
 struct AppPolicy {
@@ -33,8 +37,14 @@ impl AppPolicy {
                 .split(':')
                 .map(PathBuf::from)
                 .collect(),
-            tcp_bind: "9418".split(':').filter_map(|s| s.parse::<u16>().ok()).collect(),
-            tcp_connect: "80:443".split(':').filter_map(|s| s.parse::<u16>().ok()).collect(),
+            tcp_bind: "9418"
+                .split(':')
+                .filter_map(|s| s.parse::<u16>().ok())
+                .collect(),
+            tcp_connect: "80:443"
+                .split(':')
+                .filter_map(|s| s.parse::<u16>().ok())
+                .collect(),
         }
     }
 
@@ -43,39 +53,52 @@ impl AppPolicy {
     }
 
     fn join_paths(paths: &HashSet<PathBuf>) -> String {
-        paths.iter()
-             .map(|p| p.to_string_lossy().into_owned())
-             .collect::<Vec<_>>()
-             .join(":")
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(":")
     }
 
     fn join_ports(ports: &HashSet<u16>) -> String {
-        ports.iter()
-             .map(|p| p.to_string())
-             .collect::<Vec<_>>()
-             .join(":")
+        ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(":")
     }
 }
 
+
 fn db_client() -> Result<Client> {
-    let conn_str = "host=127.0.0.1 port=5432 user=sandboxuser password=supernanny dbname=sandboxdb";
+    let conn_str =
+        "host=127.0.0.1 port=5432 user=sandboxuser password=supernanny dbname=sandboxdb";
     Client::connect(conn_str, NoTls).context("Failed to connect to PostgreSQL")
 }
 
 fn fetch_policy_from_db(app: &str) -> Result<AppPolicy> {
     let mut client = db_client()?;
-    let query = "SELECT default_ro, default_rw, tcp_bind, tcp_connect FROM app_policy WHERE app_name = $1";
+    let query =
+        "SELECT default_ro, default_rw, tcp_bind, tcp_connect FROM app_policy WHERE app_name = $1";
     if let Some(row) = client.query_opt(query, &[&app])? {
         let ro: String = row.get(0);
         let rw: String = row.get(1);
         let bind: String = row.get(2);
         let connect: String = row.get(3);
+
         let ro_paths = ro.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
         let rw_paths = rw.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
         let tcp_bind = bind.split(':').filter_map(|s| s.parse::<u16>().ok()).collect();
         let tcp_connect = connect.split(':').filter_map(|s| s.parse::<u16>().ok()).collect();
-        Ok(AppPolicy { ro_paths, rw_paths, tcp_bind, tcp_connect })
+
+        Ok(AppPolicy {
+            ro_paths,
+            rw_paths,
+            tcp_bind,
+            tcp_connect,
+        })
     } else {
+        // fallback
         Ok(AppPolicy::default_policy())
     }
 }
@@ -105,6 +128,13 @@ fn update_policy_in_db(app: &str, policy: &AppPolicy) -> Result<()> {
     Ok(())
 }
 
+fn get_hostname() -> String {
+    get_hostname_raw()
+        .unwrap_or_else(|_| "unknown".into())
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn log_event(app: &str, path: &Path, operation: &str, result: &str) -> Result<()> {
     let hostname = get_hostname();
     let denied_path = path.to_string_lossy().into_owned();
@@ -117,55 +147,40 @@ fn log_event(app: &str, path: &Path, operation: &str, result: &str) -> Result<()
     Ok(())
 }
 
-fn get_hostname() -> String {
-    get_hostname_raw()
-        .unwrap_or_else(|_| "unknown".into())
-        .to_string_lossy()
-        .into_owned()
-}
-
 fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
     let abi = ABI::V5;
     let base = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))?
         .handle_access(AccessNet::BindTcp)?
         .handle_access(AccessNet::ConnectTcp)?;
+
+    // Because handle_access consumes self, we store result in 'created'
     let mut created = base.create()?;
 
+    // Add read-only paths
     for path in &policy.ro_paths {
-        match fs::canonicalize(path) {
-            Ok(canonical_path) => {
-                let fd = PathFd::new(canonical_path.as_os_str())?;
-                let rule = PathBeneath::new(fd, AccessFs::from_read(abi));
-                created = created.add_rule(rule)?;
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to canonicalize RO path: {:?}. Error: {}", path, e);
-            }
+        if let Ok(canonical_path) = fs::canonicalize(path) {
+            let fd = PathFd::new(canonical_path.as_os_str())?;
+            let rule = PathBeneath::new(fd, AccessFs::from_read(abi));
+            created = created.add_rule(rule)?;
         }
     }
 
+    // Add read-write paths
     for path in &policy.rw_paths {
-        match fs::canonicalize(path) {
-            Ok(canonical_path) => {
-                let fd = PathFd::new(canonical_path.as_os_str())?;
-                let rule = PathBeneath::new(fd, AccessFs::from_all(abi));
-                created = created.add_rule(rule)?;
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to canonicalize RW path: {:?}. Error: {}", path, e);
-            }
+        if let Ok(canonical_path) = fs::canonicalize(path) {
+            let fd = PathFd::new(canonical_path.as_os_str())?;
+            let rule = PathBeneath::new(fd, AccessFs::from_all(abi));
+            created = created.add_rule(rule)?;
         }
     }
 
+    // Add TCP rules
     for port in &policy.tcp_bind {
-        let rule = NetPort::new(*port, AccessNet::BindTcp);
-        created = created.add_rule(rule)?;
+        created = created.add_rule(NetPort::new(*port, AccessNet::BindTcp))?;
     }
-
     for port in &policy.tcp_connect {
-        let rule = NetPort::new(*port, AccessNet::ConnectTcp);
-        created = created.add_rule(rule)?;
+        created = created.add_rule(NetPort::new(*port, AccessNet::ConnectTcp))?;
     }
 
     let status = created.restrict_self()?;
@@ -226,13 +241,13 @@ fn run_sandbox_run_mode(
 fn parse_denied_lines(log_file: &str) -> Result<HashSet<PathBuf>> {
     let re = Regex::new(
         r#"(?x)
-        (?:openat\(.*?,\s*"([^"]+)" |  # openat's 2nd argument
-           (?:open|stat|execve|access|readlink)\("([^"]+)" |  # others' 1st argument
-           getdents(?:64)?\(.*?,\s*"([^"]+)"  # getdents path
+        (?:openat\(.*?,\s*"([^"]+)" |  
+           (?:open|stat|execve|access|readlink)\("([^"]+)" |
+           getdents(?:64)?\(.*?,\s*"([^"]+)"
         )
         .*?EACCES|EPERM
         "#
-    ).context("Failed to compile regex")?;
+    )?;
 
     let mut denials = HashSet::new();
 
@@ -266,12 +281,14 @@ fn parse_denied_lines(log_file: &str) -> Result<HashSet<PathBuf>> {
 
 fn process_denials(log_file: &str, policy: &mut AppPolicy, app: &str) -> Result<bool> {
     let denied_paths = parse_denied_lines(log_file)?;
-
     let mut updated = false;
+
     for path in denied_paths {
         if policy.contains_path(&path) || is_symlink(&path) {
             continue;
         }
+        // In a real test environment, you'd skip interactive prompts
+        // or mock them. We'll leave the code here for demonstration.
         let choices = &["Read-Only", "Read-Write", "Deny"];
         let selection = Select::new()
             .with_prompt(format!("Access denied for {}. Allow as:", path.display()))
@@ -325,17 +342,18 @@ fn management_flow() -> Result<()> {
             update_policy_in_db(app, &policy)?;
         }
 
-        let run_again = Confirm::new()
-            .with_prompt("Do you want to run the application again with the updated policy?")
+        // Ask user if they want to run again with updated policy
+        let do_second_run = Confirm::new()
+            .with_prompt("Would you like to run the application again with the updated policy?")
             .default(true)
             .interact()?;
 
-        if run_again {
+        if do_second_run {
             let second_log = "sandboxer_second.log";
             let second_status = run_sandbox_run_mode(app, app_args, &policy, second_log, "second")?;
             let second_success = second_status.success();
             let second_denials = parse_denied_lines(second_log)?;
-            
+
             if second_denials.is_empty() && second_success {
                 println!("Second run successful. No denied operations.");
             } else {
@@ -358,15 +376,26 @@ fn sandbox_main() -> ! {
     }
     let cmd = &args[2];
     let cmd_args = &args[3..];
+
     let policy = AppPolicy {
         ro_paths: env::var("LL_FS_RO").unwrap_or_default()
-            .split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect(),
         rw_paths: env::var("LL_FS_RW").unwrap_or_default()
-            .split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .collect(),
         tcp_bind: env::var("LL_TCP_BIND").unwrap_or_default()
-            .split(':').filter_map(|s| s.parse::<u16>().ok()).collect(),
+            .split(':')
+            .filter_map(|s| s.parse::<u16>().ok())
+            .collect(),
         tcp_connect: env::var("LL_TCP_CONNECT").unwrap_or_default()
-            .split(':').filter_map(|s| s.parse::<u16>().ok()).collect(),
+            .split(':')
+            .filter_map(|s| s.parse::<u16>().ok())
+            .collect(),
     };
 
     if let Err(e) = enforce_landlock(&policy) {
@@ -391,4 +420,98 @@ fn main() -> Result<()> {
         management_flow()?;
     }
     Ok(())
+}
+
+// -----------------------------------------------------------------------
+// Test code begins here.
+// -----------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // A helper that won't spawn or enforce Landlock in tests.
+    // Just checks logic for default policy, DB policy, etc.
+    #[test]
+    fn test_default_policy() {
+        let policy = AppPolicy::default_policy();
+        // We expect some known entries in ro_paths from the default definition
+        assert!(policy.ro_paths.contains(Path::new("/bin")));
+        assert!(policy.ro_paths.contains(Path::new("/etc")));
+        assert!(policy.rw_paths.contains(Path::new("/tmp")));
+    }
+
+    // Demonstrates how to test a function that doesn't require
+    // actual DB or Landlock. This is purely logic-based.
+    #[test]
+    fn test_join_paths_and_ports() {
+        let mut policy = AppPolicy::default_policy();
+        policy.ro_paths.insert(PathBuf::from("/home"));
+        let ro_joined = AppPolicy::join_paths(&policy.ro_paths);
+        assert!(ro_joined.contains("/home"));
+
+        policy.tcp_bind.insert(1234);
+        let bind_joined = AppPolicy::join_ports(&policy.tcp_bind);
+        assert!(bind_joined.contains("1234"));
+    }
+
+    #[test]
+    fn test_db_interaction() -> Result<()> {
+        let app_name = "test_db_interaction_app";
+
+        // Create test policy with unique values
+        let mut policy = AppPolicy::default_policy();
+        policy.ro_paths.insert(PathBuf::from("/test/db/path"));
+        policy.rw_paths.insert(PathBuf::from("/test/db/rw"));
+        policy.tcp_bind.insert(9090);
+        policy.tcp_connect.insert(9443);
+
+        // Ensure we start with a clean slate
+        let mut client = db_client()?;
+        client.execute("DELETE FROM app_policy WHERE app_name = $1", &[&app_name])?;
+
+        // Test policy insertion
+        update_policy_in_db(app_name, &policy)?;
+
+        // Test policy retrieval
+        let fetched_policy = fetch_policy_from_db(app_name)?;
+
+        // Verify all fields match
+        assert_eq!(fetched_policy.ro_paths, policy.ro_paths, "RO paths mismatch");
+        assert_eq!(fetched_policy.rw_paths, policy.rw_paths, "RW paths mismatch");
+        assert_eq!(fetched_policy.tcp_bind, policy.tcp_bind, "TCP bind ports mismatch");
+        assert_eq!(fetched_policy.tcp_connect, policy.tcp_connect, "TCP connect ports mismatch");
+
+        // Cleanup
+        client.execute("DELETE FROM app_policy WHERE app_name = $1", &[&app_name])?;
+
+        Ok(())
+    }
+
+    // parse_denied_lines() test with mock log files
+    #[test]
+    fn test_parse_denied_lines() -> Result<()> {
+        use std::io::Write;
+
+        // Create a mock strace log in /tmp
+        let mock_log_path = "/tmp/mock_sandbox_test.log";
+        {
+            let mut file = File::create(mock_log_path)?;
+            // A fake line that looks like open("/some/denied/path", ...) = -1 EACCES
+            // Real lines would be more elaborate, but we just need to match the regex
+            writeln!(
+                file,
+                r#"openat(AT_FDCWD, "/some/denied/path", O_RDONLY) = -1 EACCES (Permission denied)"#
+            )?;
+        }
+
+        let result = parse_denied_lines("mock_sandbox_test.log")?;
+        // Clean up the test file
+        let _ = fs::remove_file(mock_log_path);
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(Path::new("/some/denied/path")));
+        Ok(())
+    }
 }
