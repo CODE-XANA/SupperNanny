@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use dialoguer::Select;
+use dialoguer::{Select,Confirm};
 use landlock::{
     Access, AccessFs, AccessNet, ABI, NetPort, PathBeneath, PathFd, Ruleset, RulesetStatus,
     RulesetAttr, RulesetCreatedAttr,
@@ -324,14 +324,25 @@ fn management_flow() -> Result<()> {
             println!("Updating policy in the database...");
             update_policy_in_db(app, &policy)?;
         }
-        let second_log = "sandboxer_second.log";
-        let second_status = run_sandbox_run_mode(app, app_args, &policy, second_log, "second")?;
-        let second_success = second_status.success();
-        let second_denials = parse_denied_lines(second_log)?;
-        if second_denials.is_empty() && second_success {
-            println!("Second run successful. No denied operations.");
+
+        let run_again = Confirm::new()
+            .with_prompt("Do you want to run the application again with the updated policy?")
+            .default(true)
+            .interact()?;
+
+        if run_again {
+            let second_log = "sandboxer_second.log";
+            let second_status = run_sandbox_run_mode(app, app_args, &policy, second_log, "second")?;
+            let second_success = second_status.success();
+            let second_denials = parse_denied_lines(second_log)?;
+            
+            if second_denials.is_empty() && second_success {
+                println!("Second run successful. No denied operations.");
+            } else {
+                println!("Denied operations still detected. Further updates may be needed.");
+            }
         } else {
-            println!("Denied operations still detected. Further updates may be needed.");
+            println!("Exiting without a second run.");
         }
     } else {
         println!("Program executed successfully under sandbox.");
