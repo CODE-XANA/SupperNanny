@@ -1,0 +1,7 @@
+FROM postgres:latest
+
+ENV POSTGRES_USER=sandboxuser
+ENV POSTGRES_PASSWORD=supernanny
+ENV POSTGRES_DB=sandboxdb
+
+COPY docker/postgres/init.sql /docker-entrypoint-initdb.d/

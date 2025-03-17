@@ -31,12 +31,14 @@ Supernanny is a project that includes a sandboxing component called "Sandboxer."
 To build the Supernanny Sandboxer, follow these steps:
 
 1. **Clone the Repository**:
+
    ```bash
    git clone https://github.com/CODE-XANA/SupperNanny.git
    cd supernanny
    ```
 
 2. **Build the Project**:
+
    ```rust
    cargo build --release
    ```
@@ -108,7 +110,6 @@ Supernanny includes additional modules such as:
 
 - **User Interface**: Provides a user-friendly interface for managing policies and monitoring sandboxed applications.
 - **Network Security**: Enhances security by monitoring and controlling network access.
-
 
 ## License
 

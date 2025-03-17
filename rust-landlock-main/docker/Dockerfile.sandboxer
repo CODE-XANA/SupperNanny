@@ -1,0 +1,32 @@
+FROM rust:latest
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    strace \
+    libpq-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Create dummy main.rs for dependency caching
+RUN mkdir -p src && echo "fn main() {println!(\"dummy main\")}" > src/main.rs
+
+# Copy dependency files
+COPY Cargo.toml .
+COPY Cargo.lock .
+
+# Build dependencies first
+RUN cargo build --release
+
+# Copy real source
+COPY src ./src
+
+# Touch all source files to force rebuild
+RUN find src -type f -exec touch {} +
+
+# Build actual binary
+RUN cargo build --release --bin sandboxer_db
+
+# Set entrypoint to handle command arguments
+ENTRYPOINT ["./target/release/sandboxer_db"]
+CMD ["--sandbox", "ls", "-l"]  # Default command if none specified
