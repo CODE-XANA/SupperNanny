@@ -36,9 +36,9 @@ struct AppPolicy {
 #[derive(Debug)]
 struct User {
     user_id: i32,
+    #[allow(dead_code)]
     username: String,
 }
-
 impl AppPolicy {
     fn default_policy() -> Self {
         Self {
