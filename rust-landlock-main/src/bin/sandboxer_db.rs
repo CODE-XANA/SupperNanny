@@ -557,7 +557,7 @@ fn process_denials(
             }
         } else {
             // Auto-deny if user can't manage policies
-            log_event(user.user_id, app, &final_path, "syscall", "granted_ro")?;
+            log_event(user.user_id, app, &final_path, "syscall", "denied")?;
         }
     }
 
