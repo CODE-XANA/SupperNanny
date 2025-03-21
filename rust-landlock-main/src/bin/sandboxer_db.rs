@@ -548,11 +548,11 @@ fn process_denials(
                 }
                 1 => {
                     policy.rw_paths.insert(final_path.clone());
-                    log_event(user.user_id, app, &final_path, "syscall", "granted_ro")?;
+                    log_event(user.user_id, app, &final_path, "syscall", "granted_rw")?;
                     updated = true;
                 }
                 _ => {
-                    log_event(user.user_id, app, &final_path, "syscall", "granted_ro")?;
+                    log_event(user.user_id, app, &final_path, "syscall", "denied")?;
                 }
             }
         } else {
