@@ -1,7 +1,7 @@
 use yew::prelude::*;
 use yew_router::prelude::*;
 mod auth;
-mod envs_page;
+mod home;
 mod models;
 mod utils;
 mod logout;
@@ -10,8 +10,8 @@ mod logout;
 pub enum Route {
     #[at("/")]
     Login,
-    #[at("/envs")]
-    Envs,
+    #[at("/home")]
+    Home,
 }
 
 #[function_component(App)]
@@ -26,10 +26,9 @@ pub fn app() -> Html {
 fn switch(route: Route) -> Html {
     match route {
         Route::Login => html! { <auth::LoginForm /> },
-        Route::Envs  => html! { <envs_page::EnvsPage /> },
+        Route::Home  => html! { <home::Home /> },
     }
 }
-
 
 fn main() {
     yew::Renderer::<App>::new().render();

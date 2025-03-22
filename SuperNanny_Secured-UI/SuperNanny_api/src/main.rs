@@ -12,7 +12,9 @@ use futures_util::future::{ready, LocalBoxFuture, Ready};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration as StdDuration, Instant};
+use time::Duration as TimeDuration;
+
 
 use argon2::{Argon2, PasswordVerifier};
 use argon2::password_hash::PasswordHash;
@@ -233,6 +235,92 @@ async fn login(req: HttpRequest, credentials: web::Json<LoginRequest>) -> HttpRe
 async fn protected_route(_req: HttpRequest) -> impl Responder {
     HttpResponse::Ok().body("Accès autorisé à /protected")
 }
+
+#[get("/check_auth")]
+async fn check_auth(req: HttpRequest) -> HttpResponse {
+    // Vérifier le cookie "access_token"
+    if let Some(cookie) = req.cookie("access_token") {
+        if !is_valid_token(cookie.value()) {
+            return HttpResponse::Forbidden().body("Accès refusé");
+        }
+    } else {
+        return HttpResponse::Forbidden().body("Accès refusé");
+    }
+
+    // Vérifier le header CSRF
+    if let Some(csrf_header) = req.headers().get("X-CSRF-Token") {
+        let csrf_str = csrf_header.to_str().unwrap_or("");
+        let csrf_guard = CSRF_TOKEN.lock().unwrap();
+        if csrf_str != csrf_guard.as_str() {
+            return HttpResponse::Forbidden().body("CSRF token invalide");
+        }
+    } else {
+        return HttpResponse::Forbidden().body("CSRF token manquant");
+    }
+
+    HttpResponse::Ok().body("Accès autorisé")
+}
+
+
+#[post("/logout")]
+async fn logout(req: HttpRequest) -> HttpResponse {
+    // Vérification manuelle de l'authentification
+
+    // Vérifier le cookie "access_token"
+    if let Some(cookie) = req.cookie("access_token") {
+        if !is_valid_token(cookie.value()) {
+            return HttpResponse::Forbidden().body("Permission denied");
+        }
+    } else {
+        return HttpResponse::Forbidden().body("Permission denied");
+    }
+
+    // Vérifier le header CSRF
+    if let Some(csrf_header) = req.headers().get("X-CSRF-Token") {
+        let csrf_str = csrf_header.to_str().unwrap_or("");
+        let csrf_guard = CSRF_TOKEN.lock().unwrap();
+        if csrf_str != csrf_guard.as_str() {
+            return HttpResponse::Forbidden().body("CSRF token invalide");
+        }
+    } else {
+        return HttpResponse::Forbidden().body("CSRF token manquant");
+    }
+
+    // Réinitialiser les tokens côté serveur
+    {
+        let mut token_data = SERVER_TOKEN.lock().unwrap();
+        token_data.value = String::new();
+        token_data.expires_at = 0;
+    }
+    {
+        let mut csrf_token = CSRF_TOKEN.lock().unwrap();
+        *csrf_token = String::new();
+    }
+
+    // Créer des cookies "vides" pour forcer la suppression côté client
+    let access_cookie = Cookie::build("access_token", "")
+        .http_only(true)
+        .secure(false)
+        .same_site(SameSite::Strict)
+        .path("/")
+        .max_age(TimeDuration::seconds(0))
+        .finish();
+
+    let csrf_cookie = Cookie::build("csrf_token", "")
+        .http_only(false)
+        .secure(false)
+        .same_site(SameSite::Strict)
+        .path("/")
+        .max_age(TimeDuration::seconds(0))
+        .finish();
+
+    HttpResponse::Ok()
+        .cookie(access_cookie)
+        .cookie(csrf_cookie)
+        .body("Déconnecté")
+}
+
+
 
 /* ========================================================================== */
 
@@ -485,7 +573,7 @@ async fn get_choice(
     drop(map);
     let mut last_log_map = state.last_log.lock().unwrap();
     let now = Instant::now();
-    if last_log_map.get(&key).map_or(true, |last| now.duration_since(*last) >= Duration::from_secs(20)) {
+    if last_log_map.get(&key).map_or(true, |last| now.duration_since(*last) >= StdDuration::from_secs(20)) {
         last_log_map.insert(key.clone(), now);
         println!(
             "[API] Le script interroge pour (app: '{}', path: '{}'). Choix actuel: '{}'",
@@ -586,6 +674,8 @@ async fn main() -> std::io::Result<()> {
             
             // Endpoints d'authentification
             .service(login)
+            .service(check_auth)
+            .service(logout) // logout fait sa propre vérification de token
             // Endpoints protégés avec middleware (préfixe explicite pour éviter tout conflit)
             .service(
                 web::scope("")

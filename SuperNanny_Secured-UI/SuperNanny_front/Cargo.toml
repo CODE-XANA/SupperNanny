@@ -1,6 +1,3 @@
 [workspace]
-members = [
-    "frontend",
-    "src-tauri"
-]
-workspace.resolver = "2"
+members = ["frontend"]
+resolver = "2"

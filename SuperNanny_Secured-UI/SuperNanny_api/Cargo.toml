@@ -24,3 +24,4 @@ openssl = "0.10"
 diesel = { version = "2.1", features = ["postgres", "r2d2", "chrono"] }
 dotenv = "0.15"
 notify-rust = "4.5.6"
+time = "0.3"

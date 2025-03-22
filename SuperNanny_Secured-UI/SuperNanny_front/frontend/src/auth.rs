@@ -41,7 +41,7 @@ pub fn login_form() -> Html {
                         log!("Connexion réussie !");
                         message_async.set("Connexion réussie".to_string());
                         // Rediriger vers la page des environnements
-                        navigator.push(&Route::Envs);
+                        navigator.push(&Route::Home);
                     }
                     Ok(resp) => {
                         log!(format!("Échec de la connexion : statut {}", resp.status()));
@@ -57,15 +57,18 @@ pub fn login_form() -> Html {
     };
 
     html! {
-        <div>
+        <div class="login-container">
+          <div class="login-page">
             <h2>{ "Connexion" }</h2>
             <form {onsubmit}>
-                <input ref={password_ref} type="password" placeholder="Mot de passe" />
-                <button type="submit">{ "Se connecter" }</button>
+              <input ref={password_ref} type="password" placeholder="Mot de passe" />
+              <button type="submit">{ "Se connecter" }</button>
             </form>
             <p>{ (*message).clone() }</p>
+          </div>
         </div>
     }
+    
 }
 
 #[derive(serde::Serialize)]
