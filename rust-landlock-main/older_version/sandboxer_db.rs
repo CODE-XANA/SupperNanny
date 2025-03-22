@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
-use dialoguer::{Select, Confirm};
+use bcrypt::verify;
+use dialoguer::{Confirm, Input, Password, Select};
 use landlock::{
     Access, AccessFs, AccessNet, ABI, NetPort, PathBeneath, PathFd, Ruleset, RulesetStatus,
     RulesetAttr, RulesetCreatedAttr,
@@ -30,6 +31,12 @@ struct AppPolicy {
     rw_paths: HashSet<PathBuf>,
     tcp_bind: HashSet<u16>,
     tcp_connect: HashSet<u16>,
+}
+
+#[derive(Debug)]
+struct User {
+    user_id: i32,
+    username: String,
 }
 
 impl AppPolicy {
@@ -101,77 +108,163 @@ static POOL: Lazy<Pool<PostgresConnectionManager<NoTls>>> = Lazy::new(|| {
         .expect("Failed to create pool.")
 });
 
-// A small helper function to get a connection from the pool
 pub fn get_db_conn() -> Result<r2d2::PooledConnection<PostgresConnectionManager<NoTls>>> {
     POOL.get().context("Failed to get DB connection from pool")
+}
+
+// -----------------------------------------------------------------------
+// RBAC Functions
+// -----------------------------------------------------------------------
+
+fn authenticate_user(username: &str, password: &str) -> Result<User> {
+    let mut conn = get_db_conn().context("Failed to get DB connection for authentication")?;
+
+    let row = conn.query_opt(
+        "SELECT user_id, password_hash FROM users WHERE username = $1",
+        &[&username],
+    )
+    .context("Authentication query failed")?
+    .ok_or_else(|| anyhow!("User not found"))?;
+
+    let stored_hash: String = row.get(1);
+    if verify(password, &stored_hash).map_err(|e| anyhow!("Password verification failed: {}", e))? {
+        Ok(User {
+            user_id: row.get(0),
+            username: username.to_string(),
+        })
+    } else {
+        Err(anyhow!("Invalid credentials"))
+    }
+}
+
+fn has_permission(user_id: i32, permission: &str) -> Result<bool> {
+    let mut conn = get_db_conn().context("Failed to get DB connection for permission check")?;
+    let count: i64 = conn.query_one(
+        r#"
+        SELECT COUNT(*) FROM role_permissions
+        WHERE role_id IN (
+            SELECT role_id FROM user_roles WHERE user_id = $1
+        )
+        AND permission_id = (
+            SELECT permission_id FROM permissions WHERE permission_name = $2
+        )
+        "#,
+        &[&user_id, &permission],
+    )?
+    .get(0);
+
+    Ok(count > 0)
 }
 
 // -----------------------------------------------------------------------
 // DB Functions
 // -----------------------------------------------------------------------
 
-fn fetch_policy_from_db(app: &str) -> Result<AppPolicy> {
-    let mut client = get_db_conn().context("Could not fetch DB connection to retrieve policy")?; // [EH-IMPROVED]
-    let query =
-        "SELECT default_ro, default_rw, tcp_bind, tcp_connect FROM app_policy WHERE app_name = $1";
+fn fetch_policy_from_db(app: &str, user: &User) -> Result<AppPolicy> {
+    let mut client = get_db_conn().context("Failed to get DB connection for policy fetch")?;
 
-    let row_opt = client
-        .query_opt(query, &[&app])
-        .with_context(|| format!("Failed to query policy for app '{}'", app))?; // [EH-IMPROVED]
+    // Get user's roles (assuming single role for simplicity)
+    let roles: Vec<String> = client.query(
+        "SELECT r.role_name FROM roles r
+         JOIN user_roles ur ON r.role_id = ur.role_id
+         WHERE ur.user_id = $1",
+        &[&user.user_id],
+    )?
+    .iter()
+    .map(|row| row.get(0))
+    .collect();
 
-    if let Some(row) = row_opt {
-        let ro: String = row.get(0);
-        let rw: String = row.get(1);
-        let bind: String = row.get(2);
-        let connect: String = row.get(3);
+    // Try each role until we find a policy
+    for role in roles {
+        let query = "SELECT default_ro, default_rw, tcp_bind, tcp_connect
+                     FROM app_policy
+                     WHERE app_name = $1 AND role_id = (SELECT role_id FROM roles WHERE role_name = $2)";
 
-        let ro_paths = ro.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
-        let rw_paths = rw.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect();
-        let tcp_bind = bind.split(':').filter_map(|s| s.parse::<u16>().ok()).collect();
-        let tcp_connect = connect.split(':').filter_map(|s| s.parse::<u16>().ok()).collect();
+        if let Some(row) = client.query_opt(query, &[&app, &role])? {
+            // Parse and return policy if found
+            let ro = parse_paths(row.get(0));
+            let rw = parse_paths(row.get(1));
+            let bind = parse_ports(row.get(2));
+            let connect = parse_ports(row.get(3));
 
-        Ok(AppPolicy {
-            ro_paths,
-            rw_paths,
-            tcp_bind,
-            tcp_connect,
-        })
-    } else {
-        // fallback
-        Ok(AppPolicy::default_policy())
+            return Ok(AppPolicy {
+                ro_paths: ro,
+                rw_paths: rw,
+                tcp_bind: bind,
+                tcp_connect: connect,
+            });
+        }
     }
+
+    // Fallback to default policy if no role-specific policy found
+    Ok(AppPolicy::default_policy())
 }
 
-fn update_policy_in_db(app: &str, policy: &AppPolicy) -> Result<()> {
-    let mut conn = get_db_conn().context("Could not fetch DB connection to update policy")?;
-    let mut tx = conn
-        .transaction()
-        .context("Failed to begin transaction for updating policy")?; // [EH-IMPROVED]
+// Helper functions
+fn parse_paths(paths: String) -> HashSet<PathBuf> {
+    paths.split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn parse_ports(ports: String) -> HashSet<u16> {
+    ports.split(':')
+        .filter_map(|s| s.parse().ok())
+        .collect()
+}
+
+fn update_policy_in_db(app: &str, policy: &AppPolicy, user: &User) -> Result<()> {
+    if !has_permission(user.user_id, "manage_policies")? {
+        return Err(anyhow!("Insufficient permissions to modify policies"));
+    }
+
+    let mut conn = get_db_conn().context("Failed to get DB connection for policy update")?;
+    let mut tx = conn.transaction().context("Failed to start transaction")?;
+
+    // Retrieve the user's role (assume one primary role per user)
+    let role_id: i32 = tx.query_one(
+        "SELECT r.role_id FROM roles r
+         JOIN user_roles ur ON r.role_id = ur.role_id
+         WHERE ur.user_id = $1 LIMIT 1",
+        &[&user.user_id],
+    )?.get(0);
 
     let sql = r#"
-        INSERT INTO app_policy (app_name, default_ro, default_rw, tcp_bind, tcp_connect, updated_at)
-        VALUES ($1, $2, $3, $4, $5, NOW())
-        ON CONFLICT (app_name) DO UPDATE SET
-            default_ro = EXCLUDED.default_ro,
-            default_rw = EXCLUDED.default_rw,
-            tcp_bind = EXCLUDED.tcp_bind,
-            tcp_connect = EXCLUDED.tcp_connect,
-            updated_at = NOW()
+    INSERT INTO app_policy
+    (app_name, role_id, default_ro, default_rw, tcp_bind, tcp_connect, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    ON CONFLICT (app_name, role_id) DO UPDATE SET
+        default_ro = EXCLUDED.default_ro,
+        default_rw = EXCLUDED.default_rw,
+        tcp_bind = EXCLUDED.tcp_bind,
+        tcp_connect = EXCLUDED.tcp_connect,
+        updated_at = NOW()
     "#;
 
     tx.execute(
         sql,
         &[
             &app,
+            &role_id,
             &AppPolicy::join_paths(&policy.ro_paths),
             &AppPolicy::join_paths(&policy.rw_paths),
             &AppPolicy::join_ports(&policy.tcp_bind),
             &AppPolicy::join_ports(&policy.tcp_connect),
         ],
     )
-    .with_context(|| format!("Failed to UPSERT policy for app '{}'", app))?; // [EH-IMPROVED]
+    .with_context(|| format!("Failed to update policy for app '{}' and role_id '{}'", app, role_id))?;
 
-    tx.commit().context("Failed to commit policy update transaction")?;
+    tx.commit().context("Failed to commit policy update")?;
+
+    log_event(
+        user.user_id,
+        app,
+        Path::new("policy"),
+        "policy_update",
+        "success",
+    )?;
+    
 
     Ok(())
 }
@@ -187,31 +280,40 @@ fn get_hostname() -> String {
         .into_owned()
 }
 
-fn log_event(app: &str, path: &Path, operation: &str, result: &str) -> Result<()> {
+fn log_event(
+    user_id: i32,
+    app: &str,
+    path: &Path,
+    operation: &str,
+    result: &str,
+) -> Result<()> {
     let hostname = get_hostname();
     let denied_path = path.to_string_lossy().into_owned();
 
-    let mut conn = get_db_conn().context("Could not fetch DB connection to log event")?;
-    let mut tx = conn
-        .transaction()
-        .context("Failed to begin transaction for logging event")?;
+    let mut conn = get_db_conn().context("Failed to get DB connection for logging")?;
+    let mut tx = conn.transaction().context("Failed to start logging transaction")?;
 
     let sql = r#"
-        INSERT INTO sandbox_events (event_id, hostname, app_name, denied_path, operation, result)
-        VALUES (DEFAULT, $1, $2, $3, $4, $5)
+        INSERT INTO sandbox_events
+        (hostname, app_name, denied_path, operation, result, user_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
     "#;
 
-    tx.execute(sql, &[&hostname, &app, &denied_path, &operation, &result])
-        .with_context(|| {
-            format!(
-                "Could not insert log event for app '{}', path '{}', operation '{}'",
-                app, denied_path, operation
-            )
-        })?;
+    tx.execute(
+        sql,
+        &[&hostname, &app, &denied_path, &operation, &result, &user_id],
+    )
+    .with_context(|| {
+        format!(
+            "Failed to log event: app={}, path={}, op={}",
+            app, denied_path, operation
+        )
+    })?;
 
-    tx.commit().context("Failed to commit log event transaction")?;
+    tx.commit().context("Failed to commit log entry")?;
     Ok(())
 }
+
 
 // -----------------------------------------------------------------------
 // Validation and Landlock
@@ -223,7 +325,6 @@ pub fn validate_executable_path(path_str: &str) -> Result<std::path::PathBuf> {
     let path = PathBuf::from(path_str);
 
     if !path.exists() {
-        // Provide context about which path is missing
         return Err(anyhow!("Executable path does not exist: {}", path_str));
     }
 
@@ -411,12 +512,14 @@ fn process_denials(
     log_dir: &Path,
     prefix: &str,
     policy: &mut AppPolicy,
-    app: &str
+    app: &str,
+    user: &User,
 ) -> Result<bool> {
     let denied_paths = parse_denied_lines(log_dir, prefix)
         .with_context(|| format!("Failed to parse denied lines for prefix '{}'", prefix))?;
 
     let mut updated = false;
+    let can_manage = has_permission(user.user_id, "manage_policies")?;
 
     for raw_path in denied_paths {
         if policy.contains_path(&raw_path) {
@@ -425,38 +528,40 @@ fn process_denials(
 
         let final_path = match fs::canonicalize(&raw_path) {
             Ok(resolved) => resolved,
-            Err(_) => raw_path.clone(), // fallback to raw if it fails
+            Err(_) => raw_path.clone(),
         };
 
-        let choices = &["Read-Only", "Read-Write", "Deny"];
-        let selection = Select::new()
-            .with_prompt(format!("Access denied for {}. Allow as:", final_path.display()))
-            .items(choices)
-            .default(2)
-            .interact()
-            .context("User prompt failed")?;
+        if can_manage {
+            let choices = &["Read-Only", "Read-Write", "Deny"];
+            let selection = Select::new()
+                .with_prompt(format!("Access denied for {}. Allow as:", final_path.display()))
+                .items(choices)
+                .default(2)
+                .interact()
+                .context("User prompt failed")?;
 
-        match selection {
-            0 => {
-                policy.ro_paths.insert(final_path.clone());
-                log_event(app, &final_path, "syscall", "granted_ro")
-                    .context("Failed to log 'granted_ro' event")?;
-                updated = true;
+            match selection {
+                0 => {
+                    policy.ro_paths.insert(final_path.clone());
+                    log_event(user.user_id, app, &final_path, "syscall", "granted_ro")?;
+                    updated = true;
+                }
+                1 => {
+                    policy.rw_paths.insert(final_path.clone());
+                    log_event(user.user_id, app, &final_path, "syscall", "granted_ro")?;
+                    updated = true;
+                }
+                _ => {
+                    log_event(user.user_id, app, &final_path, "syscall", "granted_ro")?;
+                }
             }
-            1 => {
-                policy.rw_paths.insert(final_path.clone());
-                log_event(app, &final_path, "syscall", "granted_rw")
-                    .context("Failed to log 'granted_rw' event")?;
-                updated = true;
-            }
-            _ => {
-                log_event(app, &final_path, "syscall", "denied")
-                    .context("Failed to log 'denied' event")?;
-            }
+        } else {
+            // Auto-deny if user can't manage policies
+            log_event(user.user_id, app, &final_path, "syscall", "granted_ro")?;
         }
     }
 
-    Ok(updated)
+    Ok(updated && can_manage)  // Only true if changes were made AND user has permissions
 }
 
 // -----------------------------------------------------------------------
@@ -464,6 +569,25 @@ fn process_denials(
 // -----------------------------------------------------------------------
 
 fn management_flow() -> Result<()> {
+    // Authenticate user
+    let username = Input::<String>::new()
+        .with_prompt("Username")
+        .interact()
+        .context("Failed to read username")?;
+
+    let password = Password::new()
+        .with_prompt("Password")
+        .interact()
+        .context("Failed to read password")?;
+
+    let user = authenticate_user(&username, &password)
+        .context("Authentication failed")?;
+
+    // Check execution permission
+    if !has_permission(user.user_id, "execute_apps")? {
+        return Err(anyhow!("Insufficient permissions to execute applications"));
+    }
+
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         return Err(anyhow!("Usage: {} <APP> [ARGS...]", args[0]));
@@ -471,53 +595,65 @@ fn management_flow() -> Result<()> {
     let raw_app = &args[1];
     let app_args = &args[2..];
 
-    // 1) Fetch existing policy from DB
-    let mut policy = fetch_policy_from_db(raw_app)
-        .with_context(|| format!("Failed to fetch initial policy for '{}'", raw_app))?;
+    let mut policy = fetch_policy_from_db(raw_app, &user)
+        .with_context(|| format!("Failed to fetch policy for '{}'", raw_app))?;
 
-    // 2) First run
     let first_prefix = "sandboxer_first.log";
     let (first_status, first_tempdir) = run_sandbox_run_mode(Path::new(raw_app), app_args, &policy, first_prefix)
-        .with_context(|| format!("Failed during first run_sandbox_run_mode for '{}'", raw_app))?;
-    let first_success = first_status.success();
+        .with_context(|| format!("Failed first run for '{}'", raw_app))?;
 
-    // 3) Parse denials
-    let first_denials = parse_denied_lines(first_tempdir.path(), first_prefix)
-        .context("Failed to parse denied lines from the first run")?;
+    let has_denials = !parse_denied_lines(first_tempdir.path(), first_prefix)?.is_empty();
+    let needs_processing = !first_status.success() || has_denials;
 
-    // 4) Possibly update policy
-    if !first_denials.is_empty() || !first_success {
-        println!("Denied operations detected or the program failed. Processing...");
-        let changed = process_denials(first_tempdir.path(), first_prefix, &mut policy, raw_app)
-            .context("Failed to process denials after first run")?;
+    if needs_processing {
+        println!("Processing denials...");
+        let changed = process_denials(
+            first_tempdir.path(),
+            first_prefix,
+            &mut policy,
+            raw_app,
+            &user,
+        )
+        .context("Denial processing failed")?;
+
         if changed {
-            println!("Updating policy in the database...");
-            update_policy_in_db(raw_app, &policy)
-                .with_context(|| format!("Failed to update policy for '{}'", raw_app))?;
-        }
+            update_policy_in_db(raw_app, &policy, &user)
+                .context("Policy update failed")?;
 
-        // Second run
-        let do_second_run = Confirm::new()
-            .with_prompt("Would you like to run the application again with the updated policy?")
-            .default(true)
-            .interact()
-            .context("Failed to prompt for second run")?;
+            let do_second_run = Confirm::new()
+                .with_prompt("Would you like to run the application again with the updated policy?")
+                .default(true)
+                .interact()
+                .context("Failed to prompt for second run")?;
 
-        if do_second_run {
-            let second_prefix = "sandboxer_second.log";
-            let (second_status, second_tempdir) = run_sandbox_run_mode(Path::new(raw_app), app_args, &policy, second_prefix)
-                .with_context(|| format!("Failed during second run_sandbox_run_mode for '{}'", raw_app))?;
-            let second_success = second_status.success();
-            let second_denials = parse_denied_lines(second_tempdir.path(), second_prefix)
-                .context("Failed to parse denied lines from the second run")?;
+            if do_second_run {
+                let second_prefix = "sandboxer_second.log";
+                let (second_status, second_tempdir) = run_sandbox_run_mode(
+                    Path::new(raw_app),
+                    app_args,
+                    &policy,
+                    second_prefix
+                )
+                .with_context(|| format!("Failed during second run for '{}'", raw_app))?;
 
-            if second_denials.is_empty() && second_success {
-                println!("Second run successful. No denied operations.");
+                let second_denials = parse_denied_lines(second_tempdir.path(), second_prefix)
+                    .context("Failed to parse second run denials")?;
+
+                if second_denials.is_empty() && second_status.success() {
+                    println!("Second run successful. No denied operations.");
+                } else {
+                    println!("Denied operations still detected. Further updates may be needed.");
+                }
             } else {
-                println!("Denied operations still detected. Further updates may be needed.");
+                println!("Exiting without second run.");
             }
         } else {
-            println!("Exiting without a second run.");
+            // Handle cases where no changes were made
+            if has_permission(user.user_id, "manage_policies")? {
+                println!("No policy changes made. Skipping second run.");
+            } else {
+                println!("Insufficient permissions for policy updates. Skipping second run.");
+            }
         }
     } else {
         println!("Program executed successfully under sandbox.");
@@ -626,11 +762,14 @@ mod tests {
         policy.tcp_connect.insert(9443);
 
         let mut client = get_db_conn()?;
+        // Delete any record for this app (for testing, we ignore the role)
         client.execute("DELETE FROM app_policy WHERE app_name = $1", &[&app_name])?;
 
-        update_policy_in_db(app_name, &policy)?;
+        // Call update_policy_in_db with a dummy user.
+        update_policy_in_db(app_name, &policy, &User { user_id: 1, username: "test".to_string() })?;
 
-        let fetched_policy = fetch_policy_from_db(app_name)?;
+        // Fetch the policy for this app.
+        let fetched_policy = fetch_policy_from_db(app_name, &User { user_id: 1, username: "test".to_string() })?;
         assert_eq!(fetched_policy.ro_paths, policy.ro_paths);
         assert_eq!(fetched_policy.rw_paths, policy.rw_paths);
         assert_eq!(fetched_policy.tcp_bind, policy.tcp_bind);
