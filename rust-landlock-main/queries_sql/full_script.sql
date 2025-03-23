@@ -15,6 +15,7 @@ DROP TABLE IF EXISTS user_roles CASCADE;
 DROP TABLE IF EXISTS permissions CASCADE;
 DROP TABLE IF EXISTS roles CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS default_policies CASCADE;
 
 -- ========== TABLES ==========
 
@@ -71,6 +72,18 @@ CREATE TABLE app_policy (
     FOREIGN KEY (role_id) REFERENCES roles(role_id) ON DELETE CASCADE
 );
 
+-- Default Policies
+CREATE TABLE default_policies (
+    role_id INTEGER PRIMARY KEY,
+    default_ro TEXT NOT NULL,
+    default_rw TEXT NOT NULL,
+    tcp_bind TEXT NOT NULL,
+    tcp_connect TEXT NOT NULL,
+    allowed_ips TEXT NOT NULL,
+    allowed_domains TEXT NOT NULL,
+    FOREIGN KEY (role_id) REFERENCES roles(role_id) ON DELETE CASCADE
+);
+
 -- Sandbox Events (logs, with optional user and network fields)
 CREATE TABLE sandbox_events (
     event_id SERIAL PRIMARY KEY,
@@ -122,6 +135,12 @@ INSERT INTO user_roles (user_id, role_id) VALUES
   (1, 1),
   (2, 2),
   (3, 3);
+
+-- Default Policies for Roles
+INSERT INTO default_policies (role_id, default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains) VALUES
+  (1, '/bin:/usr:/dev/urandom:/etc:/proc:/lib', '/tmp:/dev/zero:/dev/full:/dev/pts:/dev/null', '9418', '80:443', '127.0.0.1/8:192.168.1.0/24', 'localhost:example.com'),
+  (2, '/bin:/usr:/dev/urandom:/etc:/proc:/lib', '/tmp:/dev/zero:/dev/full:/dev/pts:/dev/null', '9418', '80:443', '127.0.0.1/8:192.168.1.0/24', 'localhost:developer.com'),
+  (3, '/bin:/usr:/dev/urandom:/etc:/proc:/lib', '/tmp:/dev/zero:/dev/full:/dev/pts:/dev/null', '9418', '80:443', '127.0.0.1/8:192.168.1.0/24', 'localhost:user.com');
 
 -- App Policy: /bin/firefox for developer
 INSERT INTO app_policy (

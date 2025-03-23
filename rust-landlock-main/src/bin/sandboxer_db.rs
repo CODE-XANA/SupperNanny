@@ -44,27 +44,33 @@ struct User {
 
 impl AppPolicy {
 
-    fn default_policy() -> Self {
-        Self {
-            ro_paths: "/bin:/usr:/dev/urandom:/etc:/proc:/lib"
-                .split(':')
-                .map(PathBuf::from)
-                .collect(),
-            rw_paths: "/tmp:/dev/zero:/dev/full:/dev/pts:/dev/null"
-                .split(':')
-                .map(PathBuf::from)
-                .collect(),
-            tcp_bind: "9418"
-                .split(':')
-                .filter_map(|s| s.parse::<u16>().ok())
-                .collect(),
-            tcp_connect: "80:443"
-                .split(':')
-                .filter_map(|s| s.parse::<u16>().ok())
-                .collect(),
-            allowed_ips: HashSet::new(),
-            allowed_domains: HashSet::new(),               
-        }
+    fn default_policy_for_role(role_id: i32) -> Result<Self> {
+        let mut conn = get_db_conn().context("Failed to get DB connection for fetching default policy")?;
+
+        let query = "
+            SELECT default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains
+            FROM default_policies
+            WHERE role_id = $1
+        ";
+
+        let row = conn.query_one(query, &[&role_id])
+            .context("Failed to fetch default policy from database")?;
+
+        let ro_paths = parse_paths(row.get("default_ro"));
+        let rw_paths = parse_paths(row.get("default_rw"));
+        let tcp_bind = parse_ports(row.get("tcp_bind"));
+        let tcp_connect = parse_ports(row.get("tcp_connect"));
+        let allowed_ips = parse_ips(row.get("allowed_ips"));
+        let allowed_domains = parse_domains(row.get("allowed_domains"));
+
+        Ok(Self {
+            ro_paths,
+            rw_paths,
+            tcp_bind,
+            tcp_connect,
+            allowed_ips,
+            allowed_domains,
+        })
     }
         
 
@@ -179,8 +185,8 @@ fn fetch_policy_from_db(app: &str, user: &User) -> Result<AppPolicy> {
     let mut client = get_db_conn().context("Failed to get DB connection for policy fetch")?;
 
     // Get user's roles (assuming single role for simplicity)
-    let roles: Vec<String> = client.query(
-        "SELECT r.role_name FROM roles r
+    let roles: Vec<i32> = client.query(
+        "SELECT r.role_id FROM roles r
          JOIN user_roles ur ON r.role_id = ur.role_id
          WHERE ur.user_id = $1",
         &[&user.user_id],
@@ -190,12 +196,12 @@ fn fetch_policy_from_db(app: &str, user: &User) -> Result<AppPolicy> {
     .collect();
 
     // Try each role until we find a policy
-    for role in roles {
+    for &role_id in &roles {
         let query = "SELECT default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains
                      FROM app_policy
-                     WHERE app_name = $1 AND role_id = (SELECT role_id FROM roles WHERE role_name = $2)";
+                     WHERE app_name = $1 AND role_id = $2";
 
-        if let Some(row) = client.query_opt(query, &[&app, &role])? {
+        if let Some(row) = client.query_opt(query, &[&app, &role_id])? {
             // Parse and return policy if found
             let ro = parse_paths(row.get(0));
             let rw = parse_paths(row.get(1));
@@ -215,9 +221,12 @@ fn fetch_policy_from_db(app: &str, user: &User) -> Result<AppPolicy> {
         }
     }
 
-    // Fallback to default policy if no role-specific policy found
-    Ok(AppPolicy::default_policy())
+    // Fallback to default policy for the user's role if no role-specific policy found
+    let default_role_id = roles.first().copied().unwrap_or(0); // Use the first role or handle accordingly
+    AppPolicy::default_policy_for_role(default_role_id)
 }
+
+
 
 // Helper function to parse domains
 fn parse_domains(domains: String) -> HashSet<String> {
@@ -784,37 +793,41 @@ mod tests {
 
     // Basic logic tests for AppPolicy
     #[test]
-    fn test_default_policy() {
-        let policy = AppPolicy::default_policy();
+    fn test_default_policy() -> Result<()> {
+        let policy = AppPolicy::default_policy_for_role(1)?;
         assert!(policy.ro_paths.contains(Path::new("/bin")));
         assert!(policy.ro_paths.contains(Path::new("/etc")));
         assert!(policy.rw_paths.contains(Path::new("/tmp")));
+        Ok(())
     }
+    
 
     #[test]
-    fn test_join_paths_and_ports() {
-        let mut policy = AppPolicy::default_policy();
+    fn test_join_paths_and_ports() -> Result<()> {
+        let mut policy = AppPolicy::default_policy_for_role(1)?;
         policy.ro_paths.insert(PathBuf::from("/home"));
         let ro_joined = AppPolicy::join_paths(&policy.ro_paths);
         assert!(ro_joined.contains("/home"));
-
+    
         policy.tcp_bind.insert(1234);
         let bind_joined = AppPolicy::join_ports(&policy.tcp_bind);
         assert!(bind_joined.contains("1234"));
+        Ok(())
     }
+    
 
-    // DB interaction tests
     #[test]
     fn test_db_interaction() -> Result<()> {
         let app_name = "test_db_interaction_app";
     
-        let mut policy = AppPolicy::default_policy();
+        // Assuming role_id 1 is a valid role in your test database
+        let mut policy = AppPolicy::default_policy_for_role(1)?;
         policy.ro_paths.insert(PathBuf::from("/test/db/path"));
         policy.rw_paths.insert(PathBuf::from("/test/db/rw"));
         policy.tcp_bind.insert(9090);
         policy.tcp_connect.insert(9443);
-        policy.allowed_ips.insert("192.168.1.1".to_string()); 
-        policy.allowed_domains.insert("google.com".to_string());  
+        policy.allowed_ips.insert("192.168.1.1".to_string());
+        policy.allowed_domains.insert("google.com".to_string());
     
         let mut client = get_db_conn()?;
         // Delete any record for this app (for testing, we ignore the role)
@@ -829,12 +842,13 @@ mod tests {
         assert_eq!(fetched_policy.rw_paths, policy.rw_paths);
         assert_eq!(fetched_policy.tcp_bind, policy.tcp_bind);
         assert_eq!(fetched_policy.tcp_connect, policy.tcp_connect);
-        assert_eq!(fetched_policy.allowed_ips, policy.allowed_ips); 
-        assert_eq!(fetched_policy.allowed_domains, policy.allowed_domains);   
+        assert_eq!(fetched_policy.allowed_ips, policy.allowed_ips);
+        assert_eq!(fetched_policy.allowed_domains, policy.allowed_domains);
     
         client.execute("DELETE FROM app_policy WHERE app_name = $1", &[&app_name])?;
         Ok(())
     }
+    
     
 
     // parse_denied_lines() test with mock log files
