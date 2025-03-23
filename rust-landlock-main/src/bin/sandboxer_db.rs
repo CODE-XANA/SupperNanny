@@ -474,12 +474,15 @@ fn run_sandbox_run_mode(
     child_env.push(("LL_FS_RW".into(), AppPolicy::join_paths(&policy.rw_paths)));
     child_env.push(("LL_TCP_BIND".into(), AppPolicy::join_ports(&policy.tcp_bind)));
     child_env.push(("LL_TCP_CONNECT".into(), AppPolicy::join_ports(&policy.tcp_connect)));
+    child_env.push(("LL_ALLOWED_IPS".into(), AppPolicy::join_ips(&policy.allowed_ips)));
+    child_env.push(("LL_ALLOWED_DOMAINS".into(), AppPolicy::join_domains(&policy.allowed_domains)));
 
     let current_exe = env::current_exe()
         .context("Failed to get current executable for strace invocation")?;
 
     let status = Command::new("strace")
-        .args(&["-ff", "-yy", "-e", "trace=file,process,openat,getdents,stat"])
+        .args(&["-ff", "-yy", 
+                "-e", "trace=file,process,openat,getdents,stat,connect,socket,bind"])
         .arg("-o")
         .arg(&log_prefix_str)
         .arg(&current_exe)
@@ -494,18 +497,30 @@ fn run_sandbox_run_mode(
     Ok((status, tempdir))
 }
 
-fn parse_denied_lines(log_dir: &Path, prefix: &str) -> Result<HashSet<PathBuf>> {
+fn parse_denied_lines(log_dir: &Path, prefix: &str) -> Result<HashSet<String>> {
+    // Regex for file-related syscalls
     let path_re = Regex::new(
         r#"(?x)
         ^
-        # One of these syscalls at the start of the line:
         (?:
            openat\(.*?,\s*"([^"]+)" |
            (?:open|stat|execve|access|readlink)\("([^"]+)" |
            getdents(?:64)?\(.*?,\s*"([^"]+)"
         )
         "#,
-    ).context("Failed to compile syscall path regex")?;
+    )
+    .context("Failed to compile syscall path regex")?;
+
+    // New regex for network syscalls (connect or bind)
+    let net_re = Regex::new(
+        r#"(?x)
+        ^
+        (?:
+           (?:connect|bind)\(.*?sin_port=htons\((\d+)\)
+        )
+        "#,
+    )
+    .context("Failed to compile network syscall regex")?;
 
     let mut denials = HashSet::new();
 
@@ -525,33 +540,31 @@ fn parse_denied_lines(log_dir: &Path, prefix: &str) -> Result<HashSet<PathBuf>> 
             let line = line_result
                 .with_context(|| format!("Failed to read line in '{}'", entry.path().display()))?;
 
+            // Only process lines that contain a denial error.
             if !(line.contains("EACCES") || line.contains("EPERM")) {
                 continue;
             }
 
+            // Try matching a file-based syscall.
             if let Some(caps) = path_re.captures(&line) {
                 let path_str = caps.get(1)
                     .or_else(|| caps.get(2))
                     .or_else(|| caps.get(3))
                     .map(|m| m.as_str())
                     .unwrap_or("");
-
-                if path_str.is_empty() {
+                if !path_str.is_empty() {
+                    denials.insert(path_str.to_string());
                     continue;
                 }
-
-                let resolved = if path_str == "." {
-                    env::current_dir().context("Failed to get current directory for '.'")?
-                } else {
-                    match fs::canonicalize(path_str) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            eprintln!("Warning: cannot canonicalize '{}': {}", path_str, e);
-                            PathBuf::from(path_str)
-                        }
-                    }
-                };
-                denials.insert(resolved);
+            }
+            // If not a file syscall, try matching network-related syscalls.
+            if let Some(caps) = net_re.captures(&line) {
+                if let Some(port_match) = caps.get(1) {
+                    let port = port_match.as_str();
+                    // Prefix network events with "tcp:" to mark them.
+                    denials.insert(format!("tcp:{}", port));
+                    continue;
+                }
             }
         }
     }
@@ -566,53 +579,143 @@ fn process_denials(
     app: &str,
     user: &User,
 ) -> Result<bool> {
-    let denied_paths = parse_denied_lines(log_dir, prefix)
+    // Now we get a HashSet<String> that may contain file paths and "tcp:" entries.
+    let denied_entries = parse_denied_lines(log_dir, prefix)
         .with_context(|| format!("Failed to parse denied lines for prefix '{}'", prefix))?;
 
     let mut updated = false;
     let can_manage = has_permission(user.user_id, "manage_policies")?;
 
-    for raw_path in denied_paths {
-        if policy.contains_path(&raw_path) {
-            continue;
-        }
-
-        let final_path = match fs::canonicalize(&raw_path) {
-            Ok(resolved) => resolved,
-            Err(_) => raw_path.clone(),
-        };
-
-        if can_manage {
-            let choices = &["Read-Only", "Read-Write", "Deny"];
-            let selection = Select::new()
-                .with_prompt(format!("Access denied for {}. Allow as:", final_path.display()))
-                .items(choices)
-                .default(2)
-                .interact()
-                .context("User prompt failed")?;
-
-            match selection {
-                0 => {
-                    policy.ro_paths.insert(final_path.clone());
-                    log_event(user.user_id, app, &final_path, "syscall", "granted_ro")?;
-                    updated = true;
+    for entry in denied_entries {
+        if entry.starts_with("tcp:") {
+            // Process network denials.
+            let port_str = entry.trim_start_matches("tcp:");
+            if let Ok(port) = port_str.parse::<u16>() {
+                // Check if the port is already allowed.
+                if policy.tcp_bind.contains(&port) || policy.tcp_connect.contains(&port) {
+                    continue;
                 }
-                1 => {
-                    policy.rw_paths.insert(final_path.clone());
-                    log_event(user.user_id, app, &final_path, "syscall", "granted_rw")?;
-                    updated = true;
-                }
-                _ => {
-                    log_event(user.user_id, app, &final_path, "syscall", "denied")?;
+                if can_manage {
+                    let choices = &["Allow TCP Bind", "Allow TCP Connect", "Deny"];
+                    let selection = Select::new()
+                        .with_prompt(format!(
+                            "TCP connection denied for port {}. Allow as:",
+                            port
+                        ))
+                        .items(choices)
+                        .default(2)
+                        .interact()
+                        .context("User prompt failed")?;
+                    match selection {
+                        0 => {
+                            policy.tcp_bind.insert(port);
+                            log_event(
+                                user.user_id,
+                                app,
+                                Path::new(&format!("tcp:{}", port)),
+                                "syscall",
+                                "granted_tcp_bind",
+                            )?;
+                            updated = true;
+                        }
+                        1 => {
+                            policy.tcp_connect.insert(port);
+                            log_event(
+                                user.user_id,
+                                app,
+                                Path::new(&format!("tcp:{}", port)),
+                                "syscall",
+                                "granted_tcp_connect",
+                            )?;
+                            updated = true;
+                        }
+                        _ => {
+                            log_event(
+                                user.user_id,
+                                app,
+                                Path::new(&format!("tcp:{}", port)),
+                                "syscall",
+                                "denied",
+                            )?;
+                        }
+                    }
+                } else {
+                    log_event(
+                        user.user_id,
+                        app,
+                        Path::new(&format!("tcp:{}", port)),
+                        "syscall",
+                        "denied",
+                    )?;
                 }
             }
         } else {
-            // Auto-deny if user can't manage policies
-            log_event(user.user_id, app, &final_path, "syscall", "denied")?;
+            // Process filesystem denials as before.
+            let path = PathBuf::from(&entry);
+            if policy.contains_path(&path) {
+                continue;
+            }
+            let final_path = match fs::canonicalize(&path) {
+                Ok(resolved) => resolved,
+                Err(_) => path.clone(),
+            };
+            if can_manage {
+                let choices = &["Read-Only", "Read-Write", "Deny"];
+                let selection = Select::new()
+                    .with_prompt(format!(
+                        "Access denied for {}. Allow as:",
+                        final_path.display()
+                    ))
+                    .items(choices)
+                    .default(2)
+                    .interact()
+                    .context("User prompt failed")?;
+                match selection {
+                    0 => {
+                        policy.ro_paths.insert(final_path.clone());
+                        log_event(
+                            user.user_id,
+                            app,
+                            &final_path,
+                            "syscall",
+                            "granted_ro",
+                        )?;
+                        updated = true;
+                    }
+                    1 => {
+                        policy.rw_paths.insert(final_path.clone());
+                        log_event(
+                            user.user_id,
+                            app,
+                            &final_path,
+                            "syscall",
+                            "granted_rw",
+                        )?;
+                        updated = true;
+                    }
+                    _ => {
+                        log_event(
+                            user.user_id,
+                            app,
+                            &final_path,
+                            "syscall",
+                            "denied",
+                        )?;
+                    }
+                }
+            } else {
+                log_event(
+                    user.user_id,
+                    app,
+                    &final_path,
+                    "syscall",
+                    "denied",
+                )?;
+            }
         }
     }
 
-    Ok(updated && can_manage)  // Only true if changes were made AND user has permissions
+    Ok(updated && can_manage) // Only true if changes were made AND user has permissions
 }
 
 // -----------------------------------------------------------------------
@@ -871,7 +974,8 @@ mod tests {
 
         let result = parse_denied_lines(tempdir.path(), "mock_sandbox_test.log")?;
         assert_eq!(result.len(), 1);
-        assert!(result.contains(Path::new("/some/denied/path")));
+        // Compare with a string slice, because result is a HashSet<String>
+        assert!(result.contains("/some/denied/path"));
         Ok(())
     }
 }
