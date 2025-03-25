@@ -107,20 +107,31 @@ impl AppPolicy {
 static POOL: Lazy<Pool<PostgresConnectionManager<NoTls>>> = Lazy::new(|| {
     dotenv().ok();
 
-    let host = env::var("DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("DB_PORT").unwrap_or_else(|_| "5432".to_string());
-    let user = env::var("DB_USER").unwrap_or_else(|_| "sandboxuser".to_string());
-    let pass = env::var("DB_PASS").unwrap_or_else(|_| "supernanny".to_string());
-    let dbname = env::var("DB_NAME").unwrap_or_else(|_| "sandboxdb".to_string());
+    let host = env::var("DB_HOST").expect("DB_HOST must be set");
+    let port = env::var("DB_PORT").expect("DB_PORT must be set");
+    let user = env::var("DB_USER").expect("DB_USER must be set");
+    let pass = env::var("DB_PASS").expect("DB_PASS must be set");
+    let dbname = env::var("DB_NAME").expect("DB_NAME must be set");
 
     let mut pg_config = Config::new();
     pg_config
         .host(&host)
-        .port(port.parse().unwrap_or(5432))
+        .port(port.parse().expect("Invalid DB_PORT value"))
         .user(&user)
         .password(&pass)
         .dbname(&dbname);
 
+    // Configure SSL mode based on environment variable
+    let ssl_mode = env::var("DB_SSL_MODE").unwrap_or_else(|_| "prefer".to_string());
+    let ssl_mode = match ssl_mode.as_str() {
+        "disable" => postgres::config::SslMode::Disable,
+        "prefer" => postgres::config::SslMode::Prefer,
+        "require" => postgres::config::SslMode::Require,
+        _ => postgres::config::SslMode::Prefer,
+    };
+    pg_config.ssl_mode(ssl_mode);
+
+    // Note: Replace `NoTls` with a proper TLS implementation in production
     let manager = PostgresConnectionManager::new(pg_config, NoTls);
 
     Pool::builder()
@@ -242,6 +253,9 @@ fn parse_ips(ips: String) -> HashSet<String> {
     ips.split(':')
         .filter(|s| !s.is_empty())
         .map(String::from)
+        .filter(|ip| {
+            ip.parse::<std::net::IpAddr>().is_ok()
+        })
         .collect()
 }
 
@@ -480,9 +494,10 @@ fn run_sandbox_run_mode(
     let current_exe = env::current_exe()
         .context("Failed to get current executable for strace invocation")?;
 
-    let status = Command::new("strace")
+    let strace_path = env::var("STRACE_PATH").unwrap_or_else(|_| "/usr/bin/strace".to_string());
+    let status = Command::new(strace_path)
         .args(&["-ff", "-yy", 
-                "-e", "trace=file,process,openat,getdents,stat,connect,socket,bind"])
+            "-e", "trace=file,process,openat,getdents,stat,connect,socket,bind"])
         .arg("-o")
         .arg(&log_prefix_str)
         .arg(&current_exe)
