@@ -33,6 +33,7 @@ use diesel::PgConnection;
 use diesel::prelude::*;
 use dotenv::dotenv;
 use std::env;
+
 use notify_rust::{Notification, NotificationHandle};
 
 // ==========================================================================
@@ -407,6 +408,137 @@ async fn delete_role(pool: web::Data<DbPool>, role_id_param: web::Path<i32>) -> 
 }
 
 // ==========================================================================
+// Endpoints pour la gestion des affectations de rôles aux utilisateurs
+// ==========================================================================
+
+#[derive(Deserialize)]
+struct AssignRoleRequest {
+    user_id: i32,
+    role_id: i32,
+}
+
+#[post("/user_roles")]
+async fn assign_role(pool: web::Data<DbPool>, data: web::Json<AssignRoleRequest>) -> HttpResponse {
+    use schema::user_roles::dsl::*;
+    let mut conn = pool.get().expect("Connexion échouée");
+    // Vérifier si l'affectation existe déjà
+    if let Ok(_) = user_roles.filter(user_id.eq(data.user_id))
+                             .filter(role_id.eq(data.role_id))
+                             .first::<(i32, i32)>(&mut conn)
+    {
+        return HttpResponse::BadRequest().body("Le rôle est déjà attribué à cet utilisateur");
+    }
+    let new_assignment = (user_id.eq(data.user_id), role_id.eq(data.role_id));
+    match diesel::insert_into(user_roles)
+        .values(&new_assignment)
+        .execute(&mut conn)
+    {
+        Ok(_) => HttpResponse::Ok().body("Rôle attribué"),
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
+#[get("/user_roles/{user_id}")]
+async fn get_user_roles(pool: web::Data<DbPool>, user_id_param: web::Path<i32>) -> HttpResponse {
+    use schema::user_roles::dsl::*;
+    use schema::roles::dsl::{roles as roles_table, role_id as r_role_id, role_name};
+    let mut conn = pool.get().expect("Connexion échouée");
+    let uid = user_id_param.into_inner();
+    let results = roles_table.inner_join(user_roles.on(r_role_id.eq(role_id)))
+        .filter(schema::user_roles::dsl::user_id.eq(uid))
+        .select((r_role_id, role_name))
+        .load::<(i32, String)>(&mut conn);
+    match results {
+        Ok(vec) => {
+            let roles: Vec<_> = vec.into_iter().map(|(id, name)| {
+                serde_json::json!({ "role_id": id, "role_name": name })
+            }).collect();
+            HttpResponse::Ok().json(roles)
+        },
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
+#[delete("/user_roles/{user_id}/{role_id}")]
+async fn remove_role(pool: web::Data<DbPool>, params: web::Path<(i32, i32)>) -> HttpResponse {
+    use schema::user_roles::dsl::*;
+    let mut conn = pool.get().expect("Connexion échouée");
+    let (uid, rid) = params.into_inner();
+    match diesel::delete(user_roles.filter(user_id.eq(uid)).filter(role_id.eq(rid)))
+        .execute(&mut conn)
+    {
+        Ok(_) => HttpResponse::Ok().body("Rôle retiré"),
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
+// ==========================================================================
+// Endpoints pour la gestion des permissions associées aux rôles
+// ==========================================================================
+
+#[derive(Deserialize)]
+struct AssignPermissionRequest {
+    role_id: i32,
+    permission_id: i32,
+}
+
+#[post("/role_permissions")]
+async fn assign_permission(pool: web::Data<DbPool>, data: web::Json<AssignPermissionRequest>) -> HttpResponse {
+    use schema::role_permissions::dsl::*;
+    let mut conn = pool.get().expect("Connexion échouée");
+    if let Ok(_) = role_permissions
+        .filter(schema::role_permissions::dsl::role_id.eq(data.role_id))
+        .filter(schema::role_permissions::dsl::permission_id.eq(data.permission_id))
+        .first::<(i32, i32)>(&mut conn)
+    {
+        return HttpResponse::BadRequest().body("La permission est déjà attribuée à ce rôle");
+    }
+    let new_assignment = (schema::role_permissions::dsl::role_id.eq(data.role_id),
+                          schema::role_permissions::dsl::permission_id.eq(data.permission_id));
+    match diesel::insert_into(role_permissions)
+        .values(&new_assignment)
+        .execute(&mut conn)
+    {
+        Ok(_) => HttpResponse::Ok().body("Permission attribuée"),
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
+#[get("/role_permissions/{role_id}")]
+async fn get_role_permissions(pool: web::Data<DbPool>, role_id_param: web::Path<i32>) -> HttpResponse {
+    use schema::role_permissions::dsl::*;
+    use schema::permissions::dsl::{permissions as permissions_table, permission_id as p_permission_id, permission_name};
+    let mut conn = pool.get().expect("Connexion échouée");
+    let rid = role_id_param.into_inner();
+    let results = permissions_table.inner_join(role_permissions.on(p_permission_id.eq(permission_id)))
+        .filter(schema::role_permissions::dsl::role_id.eq(rid))
+        .select((p_permission_id, permission_name))
+        .load::<(i32, String)>(&mut conn);
+    match results {
+        Ok(vec) => {
+            let perms: Vec<_> = vec.into_iter().map(|(id, name)| {
+                serde_json::json!({ "permission_id": id, "permission_name": name })
+            }).collect();
+            HttpResponse::Ok().json(perms)
+        },
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
+#[delete("/role_permissions/{role_id}/{permission_id}")]
+async fn remove_permission(pool: web::Data<DbPool>, params: web::Path<(i32, i32)>) -> HttpResponse {
+    use schema::role_permissions::dsl::*;
+    let mut conn = pool.get().expect("Connexion échouée");
+    let (rid, pid) = params.into_inner();
+    match diesel::delete(role_permissions.filter(role_id.eq(rid)).filter(permission_id.eq(pid)))
+        .execute(&mut conn)
+    {
+        Ok(_) => HttpResponse::Ok().body("Permission retirée"),
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
+// ==========================================================================
 // Endpoints de gestion de configuration (App Policies)
 // ==========================================================================
 
@@ -584,6 +716,12 @@ async fn main() -> std::io::Result<()> {
                     .service(list_roles)
                     .service(create_role)
                     .service(delete_role)
+                    .service(assign_role)
+                    .service(get_user_roles)
+                    .service(remove_role)
+                    .service(assign_permission)
+                    .service(get_role_permissions)
+                    .service(remove_permission)
                     .service(get_envs)
                     .service(get_env_content)
                     .service(create_env)
