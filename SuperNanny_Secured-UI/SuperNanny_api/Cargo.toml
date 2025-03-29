@@ -25,3 +25,4 @@ diesel = { version = "2.1", features = ["postgres", "r2d2", "chrono"] }
 dotenv = "0.15"
 notify-rust = "4.5.6"
 time = "0.3"
+bcrypt = "0.12"
