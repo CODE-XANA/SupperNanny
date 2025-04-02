@@ -5,6 +5,7 @@ use web_sys::RequestCredentials;
 use crate::utils::get_cookies;
 use crate::models::{AppPolicy, SandboxEvent};
 use crate::logout::Logout;
+use crate::Route;
 use log::{error, info};
 
 // Helper pour extraire le CSRF depuis la chaîne de cookies
@@ -153,7 +154,7 @@ pub fn home() -> Html {
         })
     };
 
-    // Les callbacks d'update, delete et create restent inchangés (voir votre code précédent)
+    // Callback pour update
     let on_update_env = {
         let selected_env_effect = selected_env.clone();
         let envs_effect = envs.clone();
@@ -205,6 +206,7 @@ pub fn home() -> Html {
         })
     };
 
+    // Callback pour delete
     let on_delete_env = {
         let selected_env_effect = selected_env.clone();
         let envs_effect = envs.clone();
@@ -250,6 +252,7 @@ pub fn home() -> Html {
         })
     };
 
+    // Callback pour créer une nouvelle configuration
     let on_create_env = {
         let envs_effect = envs.clone();
         let new_app_name_effect = new_app_name.clone();
@@ -395,163 +398,165 @@ pub fn home() -> Html {
         })
     };
 
+    // Rendu selon le statut d'authentification
     html! {
-        <>
-          <header>
-            <div class="header-left">
-              <img src="/SuperNanny.png" alt="Logo SuperNanny" class="header-logo" />
-            </div>
-            <div class="header-title">{ "SuperNanny" }</div>
-            <div class="header-logout"><Logout /></div>
-          </header>
-          <div class="container">
-            <div class="columns">
-              <div class="column" id="config-list">
-                <h3>{ "Configurations existantes" }</h3>
-                <ul>
-                  { for envs.iter().map(|env_data| {
-                      let name = env_data.app_name.clone();
-                      html! {
-                        <li onclick={
-                          let on_select_env = on_select_env.clone();
-                          Callback::from(move |_| on_select_env.emit(name.clone()))
-                        }>
-                          { &env_data.app_name }
-                        </li>
-                      }
-                  }) }
-                </ul>
-              </div>
-              <div class="column" id="config-details">
-                {
-                  if let Some(env_data) = &*selected_env {
-                    html! {
-                      <>
-                        <h3>{ format!("Configuration : {}", env_data.app_name) }</h3>
-                        <button class="toggle-button" onclick={
-                            let is_edit_mode_effect = is_edit_mode.clone();
-                            Callback::from(move |_| is_edit_mode_effect.set(!*is_edit_mode_effect))
-                        }>
-                          { if *is_edit_mode { "Voir les événements" } else { "Modifier la configuration" } }
-                        </button>
-                        
-                        {
-                          if *is_edit_mode {
-                            // Mode édition
-                            html! {
-                              <>
-                                <div class="form-group">
-                                  <label>{ "LL_FS_RO" }</label>
-                                  <input
-                                    type="text"
-                                    value={env_data.default_ro.clone()}
-                                    oninput={on_selected_ro_change.clone()}
-                                  />
-                                </div>
-                                <div class="form-group">
-                                  <label>{ "LL_FS_RW" }</label>
-                                  <input
-                                    type="text"
-                                    value={env_data.default_rw.clone()}
-                                    oninput={on_selected_rw_change.clone()}
-                                  />
-                                </div>
-                                <div class="form-group">
-                                  <label>{ "TCP_BIND" }</label>
-                                  <input
-                                    type="text"
-                                    value={env_data.tcp_bind.clone()}
-                                    oninput={on_selected_bind_change.clone()}
-                                  />
-                                </div>
-                                <div class="form-group">
-                                  <label>{ "TCP_CONNECT" }</label>
-                                  <input
-                                    type="text"
-                                    value={env_data.tcp_connect.clone()}
-                                    oninput={on_selected_connect_change.clone()}
-                                  />
-                                </div>
-                                <div class="btn-group">
-                                  <button onclick={on_update_env.clone()}>{ "Enregistrer" }</button>
-                                  <button onclick={on_delete_env.clone()} class="btn-danger">
-                                    { "Supprimer" }
-                                  </button>
-                                </div>
-                              </>
-                            }
-                          } else {
-                            // Mode affichage des événements
-                            html! {
-                              <>
-                                <h4>{ "Événements" }</h4>
-                                <ul id="events-list">
-                                  { for events.iter().map(|evt| {
-                                      html! {
-                                        <li>{ format!("{} - {} - {}", evt.timestamp, evt.operation, evt.result) }</li>
+        {
+            match *auth_status {
+                AuthStatus::Loading => html! { <p>{"Chargement..."}</p> },
+                AuthStatus::Invalid => html! { <div style="font-weight: bold;">{"403 : Accès refusé"}</div> },
+                AuthStatus::Valid => html! {
+                    <>
+                      <div class="container">
+                        <div class="columns">
+                          <div class="column" id="config-list">
+                            <h3>{ "Configurations existantes" }</h3>
+                            <ul>
+                              { for envs.iter().map(|env_data| {
+                                  let name = env_data.app_name.clone();
+                                  html! {
+                                    <li onclick={
+                                      let on_select_env = on_select_env.clone();
+                                      Callback::from(move |_| on_select_env.emit(name.clone()))
+                                    }>
+                                      { &env_data.app_name }
+                                    </li>
+                                  }
+                              }) }
+                            </ul>
+                          </div>
+                          <div class="column" id="config-details">
+                            {
+                              if let Some(env_data) = &*selected_env {
+                                html! {
+                                  <>
+                                    <h3>{ format!("Configuration : {}", env_data.app_name) }</h3>
+                                    <button class="toggle-button" onclick={
+                                        let is_edit_mode_effect = is_edit_mode.clone();
+                                        Callback::from(move |_| is_edit_mode_effect.set(!*is_edit_mode_effect))
+                                    }>
+                                      { if *is_edit_mode { "Voir les événements" } else { "Modifier la configuration" } }
+                                    </button>
+                                    
+                                    {
+                                      if *is_edit_mode {
+                                        // Mode édition
+                                        html! {
+                                          <>
+                                            <div class="form-group">
+                                              <label>{ "LL_FS_RO" }</label>
+                                              <input
+                                                type="text"
+                                                value={env_data.default_ro.clone()}
+                                                oninput={on_selected_ro_change.clone()}
+                                              />
+                                            </div>
+                                            <div class="form-group">
+                                              <label>{ "LL_FS_RW" }</label>
+                                              <input
+                                                type="text"
+                                                value={env_data.default_rw.clone()}
+                                                oninput={on_selected_rw_change.clone()}
+                                              />
+                                            </div>
+                                            <div class="form-group">
+                                              <label>{ "TCP_BIND" }</label>
+                                              <input
+                                                type="text"
+                                                value={env_data.tcp_bind.clone()}
+                                                oninput={on_selected_bind_change.clone()}
+                                              />
+                                            </div>
+                                            <div class="form-group">
+                                              <label>{ "TCP_CONNECT" }</label>
+                                              <input
+                                                type="text"
+                                                value={env_data.tcp_connect.clone()}
+                                                oninput={on_selected_connect_change.clone()}
+                                              />
+                                            </div>
+                                            <div class="btn-group">
+                                              <button onclick={on_update_env.clone()}>{ "Enregistrer" }</button>
+                                              <button onclick={on_delete_env.clone()} class="btn-danger">
+                                                { "Supprimer" }
+                                              </button>
+                                            </div>
+                                          </>
+                                        }
+                                      } else {
+                                        // Mode affichage des événements
+                                        html! {
+                                          <>
+                                            <h4>{ "Événements" }</h4>
+                                            <ul id="events-list">
+                                              { for events.iter().map(|evt| {
+                                                  html! {
+                                                    <li>{ format!("{} - {} - {}", evt.timestamp, evt.operation, evt.result) }</li>
+                                                  }
+                                              }) }
+                                            </ul>
+                                          </>
+                                        }
                                       }
-                                  }) }
-                                </ul>
-                              </>
+                                    }
+                                  </>
+                                }
+                              } else {
+                                html! { <p>{ "Sélectionnez une configuration pour voir les détails." }</p> }
+                              }
                             }
-                          }
-                        }
-                      </>
-                    }
-                  } else {
-                    html! { <p>{ "Sélectionnez une configuration pour voir les détails." }</p> }
-                  }
+                          </div>
+                          <div class="column" id="config-create">
+                            <h3>{ "Créer une nouvelle configuration" }</h3>
+                            <div class="form-group">
+                              <label>{ "Nom du programme" }</label>
+                              <input
+                                type="text"
+                                value={(*new_app_name).clone()}
+                                oninput={on_new_app_name_input.clone()}
+                              />
+                            </div>
+                            <div class="form-group">
+                              <label>{ "LL_FS_RO (séparé par ':')" }</label>
+                              <input
+                                type="text"
+                                value={(*new_default_ro).clone()}
+                                oninput={on_new_default_ro_input.clone()}
+                              />
+                            </div>
+                            <div class="form-group">
+                              <label>{ "LL_FS_RW (séparé par ':')" }</label>
+                              <input
+                                type="text"
+                                value={(*new_default_rw).clone()}
+                                oninput={on_new_default_rw_input.clone()}
+                              />
+                            </div>
+                            <div class="form-group">
+                              <label>{ "TCP_BIND" }</label>
+                              <input
+                                type="text"
+                                value={(*new_tcp_bind).clone()}
+                                oninput={on_new_tcp_bind_input.clone()}
+                              />
+                            </div>
+                            <div class="form-group">
+                              <label>{ "TCP_CONNECT" }</label>
+                              <input
+                                type="text"
+                                value={(*new_tcp_connect).clone()}
+                                oninput={on_new_tcp_connect_input.clone()}
+                              />
+                            </div>
+                            <button onclick={on_create_env} class="btn-create">
+                              { "Créer la configuration" }
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </>
                 }
-              </div>
-              <div class="column" id="config-create">
-                <h3>{ "Créer une nouvelle configuration" }</h3>
-                <div class="form-group">
-                  <label>{ "Nom du programme" }</label>
-                  <input
-                    type="text"
-                    value={(*new_app_name).clone()}
-                    oninput={on_new_app_name_input.clone()}
-                  />
-                </div>
-                <div class="form-group">
-                  <label>{ "LL_FS_RO (séparé par ':')" }</label>
-                  <input
-                    type="text"
-                    value={(*new_default_ro).clone()}
-                    oninput={on_new_default_ro_input.clone()}
-                  />
-                </div>
-                <div class="form-group">
-                  <label>{ "LL_FS_RW (séparé par ':')" }</label>
-                  <input
-                    type="text"
-                    value={(*new_default_rw).clone()}
-                    oninput={on_new_default_rw_input.clone()}
-                  />
-                </div>
-                <div class="form-group">
-                  <label>{ "TCP_BIND" }</label>
-                  <input
-                    type="text"
-                    value={(*new_tcp_bind).clone()}
-                    oninput={on_new_tcp_bind_input.clone()}
-                  />
-                </div>
-                <div class="form-group">
-                  <label>{ "TCP_CONNECT" }</label>
-                  <input
-                    type="text"
-                    value={(*new_tcp_connect).clone()}
-                    oninput={on_new_tcp_connect_input.clone()}
-                  />
-                </div>
-                <button onclick={on_create_env} class="btn-create">
-                  { "Créer la configuration" }
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
+            }
+        }
     }
 }
 

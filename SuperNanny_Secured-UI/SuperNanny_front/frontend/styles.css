@@ -50,42 +50,70 @@ header {
 }
 
 /* ---------------------------------------------------- */
-/* 3. Conteneur principal                               */
+/* 3. Navigation minimaliste                            */
 /* ---------------------------------------------------- */
-.container {
-  max-width: 1200px;
-  margin: 2rem auto;
-  padding: 0 1rem;
+nav {
+  background-color: #fff;
+  border-top: 1px solid #eee;
+  border-bottom: 1px solid #eee;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
-/* ---------------------------------------------------- */
-/* 4. Mise en page des colonnes                         */
-/* ---------------------------------------------------- */
-.columns {
+.nav-list {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem 1rem;
   gap: 2rem;
 }
 
-.column {
-  flex: 1;
-  background-color: #fff;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 1.5rem;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+.nav-item a {
+  color: #333;
+  text-decoration: none;
+  font-size: 0.95rem;
+  font-weight: 500;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-.column h3 {
-  border-bottom: 1px solid #ddd;
-  padding-bottom: 0.5rem;
-  margin-bottom: 1rem;
-  font-weight: 500;
-  color: #333;
+.nav-item a:hover,
+.nav-item a:focus {
+  background-color: #f2f2f2;
+  color: #000;
 }
 
 /* ---------------------------------------------------- */
-/* 5. Groupes de formulaires                            */
+/* 4. Permissions (gestion des rôles & utilisateurs)    */
+/* ---------------------------------------------------- */
+.assigned-permission {
+  background-color: rgba(207, 222, 243, 0.4);
+  cursor: pointer;
+  transition: background-color 0.3s ease, transform 0.3s ease;
+}
+
+.unassigned-permission {
+  background-color: transparent;
+  cursor: pointer;
+  transition: background-color 0.3s ease, transform 0.3s ease;
+}
+
+.assigned-permission:hover {
+  background-color: rgba(207, 222, 243, 0.4);
+  transform: scale(1.02);
+}
+
+.unassigned-permission:hover {
+  background-color: rgba(207, 222, 243, 0.1);
+  transform: scale(1.02);
+}
+
+/* ---------------------------------------------------- */
+/* 5. Formulaires et inputs                             */
 /* ---------------------------------------------------- */
 .form-group {
   margin-bottom: 1.5rem;
@@ -98,7 +126,6 @@ header {
   color: #333;
 }
 
-/* Champs de saisie */
 .form-group input {
   display: block;
   width: 90%;
@@ -118,8 +145,27 @@ header {
   box-shadow: 0 0 6px rgba(63, 81, 181, 0.3);
 }
 
+.form-group select {
+  display: block;
+  width: 90%;
+  margin: 0 auto;
+  padding: 0.75rem;
+  background-color: #f9f9f9;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #333;
+  box-sizing: border-box;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.form-group select:focus {
+  outline: none;
+  border-color: #3f51b5;
+  box-shadow: 0 0 6px rgba(63, 81, 181, 0.3);
+}
+
+
 /* ---------------------------------------------------- */
-/* 6. Boutons                                           */
+/* 6. Boutons généraux                                 */
 /* ---------------------------------------------------- */
 button {
   padding: 0.75rem 1.25rem;
@@ -156,7 +202,108 @@ button:hover {
 }
 
 /* ---------------------------------------------------- */
-/* 7. Liste des configurations                          */
+/* 7. Conteneur principal et mise en page des colonnes  */
+/* ---------------------------------------------------- */
+.container {
+  max-width: 1200px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+.columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+}
+
+.column {
+  flex: 1;
+  background-color: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.column h3 {
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+  font-weight: 500;
+  color: #333;
+}
+
+/* ---------------------------------------------------- */
+/* 8. Zone de détails (gestion des rôles)               */
+/* ---------------------------------------------------- */
+/* Pour éviter le double encadrement, on ne met qu'une seule bordure sur la colonne */
+.role-details-container {
+  position: relative;
+  /* Pas de border ici, afin de ne pas empiler avec celle de .column */
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+  background-color: #fff;
+}
+
+/* Header pour aligner le titre et le bouton de suppression */
+.role-details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Bouton de suppression du rôle, petit et aligné */
+.role-details-container .role-delete-btn {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  border: none;
+  background-color: #b71c1c;
+  color: #fff;
+  cursor: pointer;
+}
+.role-details-container .role-delete-btn:hover {
+  background-color: #d32f2f;
+}
+
+/* ---------------------------------------------------- */
+/* 9. Styles spécifiques pour la gestion des utilisateurs */
+/* ---------------------------------------------------- */
+/* Ces styles s'appliquent uniquement aux pages de gestion des utilisateurs */
+
+
+
+#user-list select {
+  margin-left: 0.5rem;
+  padding: 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background-color: #fff;
+  font-size: 0.9rem;
+}
+
+#user-list button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+  border-radius: 4px;
+  background-color: #b71c1c;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+#user-list button:hover {
+  background-color: #d32f2f;
+}
+
+/* Zone de création d'utilisateur */
+#user-create .form-group {
+  margin-top: 1rem;
+}
+
+/* ---------------------------------------------------- */
+/* 10. Listes                                           */
 /* ---------------------------------------------------- */
 ul {
   list-style: none;
@@ -170,21 +317,6 @@ ul li {
   cursor: pointer;
   transition: background-color 0.3s, padding-left 0.3s;
 }
-
-/* Positionnement relatif sur le conteneur de détails */
-#config-details {
-  position: relative;
-}
-
-#config-details ul li {
-  transition: background-color 0.3s;
-}
-
-#events-list li {
-  transition: background-color 0.3s;
-  padding: 0.75rem;
-}
-
 
 ul li:hover {
   background-color: #f1f1f1;
@@ -209,7 +341,7 @@ ul li:hover {
   top: 1rem;
   right: 1rem;
   padding: 0;
-  outline: none; /* Supprime l'outline par défaut */
+  outline: none;
 }
 
 #config-details .toggle-button:hover,
@@ -220,10 +352,8 @@ ul li:hover {
   border: none !important;
 }
 
-
-
 /* ---------------------------------------------------- */
-/* 8. Adaptabilité sur mobile                           */
+/* 11. Adaptabilité sur mobile                           */
 /* ---------------------------------------------------- */
 @media (max-width: 768px) {
   .columns {
@@ -232,7 +362,7 @@ ul li:hover {
 }
 
 /* ---------------------------------------------------- */
-/* 9. Scrollbar (WebKit)                                */
+/* 12. Scrollbar (WebKit)                                */
 /* ---------------------------------------------------- */
 ::-webkit-scrollbar {
   width: 8px;
@@ -248,7 +378,7 @@ ul li:hover {
 }
 
 /* ---------------------------------------------------- */
-/* 10. Notifications / toasts                           */
+/* 13. Notifications / toasts                           */
 /* ---------------------------------------------------- */
 .toast {
   position: fixed;
@@ -268,10 +398,8 @@ ul li:hover {
 }
 
 /* ---------------------------------------------------- */
-/* 11. Styles spécifiques pour la page de connexion     */
+/* 14. Styles spécifiques pour la page de connexion     */
 /* ---------------------------------------------------- */
-
-/* Conteneur global pour centrer la page de connexion */
 .login-container {
   display: flex;
   justify-content: center;
@@ -279,7 +407,6 @@ ul li:hover {
   height: 100vh;
 }
 
-/* Boîte de connexion */
 .login-page {
   position: relative;
   width: 100%;
@@ -292,16 +419,13 @@ ul li:hover {
   z-index: 2;
 }
 
-/* Logo de connexion agrandi */
 .login-page .logo {
-  width: 250px;  /* Taille augmentée pour une meilleure visibilité */
+  width: 250px;
   height: auto;
   margin-bottom: 1.5rem;
   opacity: 0.95;
 }
 
-/* Optionnel : Watermark en fond pour la page de connexion */
-/* Vous pouvez ajuster l'opacité et la taille pour obtenir l'effet souhaité */
 .login-page::before {
   content: "";
   position: absolute;
@@ -316,7 +440,6 @@ ul li:hover {
   z-index: -1;
 }
 
-/* Titre de la page de connexion */
 .login-page h2 {
   color: #333;
   margin-top: 0rem;
@@ -325,14 +448,12 @@ ul li:hover {
   font-weight: 700;
 }
 
-/* Formulaire de connexion */
 .login-page form {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
-/* Champs de saisie pour la connexion */
 .login-page input {
   padding: 0.75rem;
   border: 1px solid #ccc;
@@ -343,7 +464,6 @@ ul li:hover {
   transition: border-color 0.3s;
 }
 
-/* Bouton de connexion */
 .login-page button {
   padding: 0.75rem;
   background-color: #3f51b5;
@@ -359,8 +479,38 @@ ul li:hover {
   background-color: #303f9f;
 }
 
-/* Message d'erreur ou de confirmation sur la page de connexion */
 .login-page p {
   margin-top: 1rem;
   color: #d32f2f;
 }
+
+/* ---------------------------------------------------- */
+/* 15. Styles spécifiques pour la gestion des utilisateurs */
+/* ---------------------------------------------------- */
+/* Ces styles ne s'appliquent qu'aux pages de gestion des utilisateurs,
+   afin de ne pas interférer avec les autres pages. */
+
+#user-list select {
+  margin-left: 0.5rem;
+  padding: 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background-color: #fff;
+  font-size: 0.9rem;
+}
+
+#user-list button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+  border-radius: 4px;
+  background-color: #b71c1c;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+#user-list button:hover {
+  background-color: #d32f2f;
+}
+
+/* Fin des styles spécifiques pour la gestion des utilisateurs */

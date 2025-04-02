@@ -174,40 +174,48 @@ async fn login(req: HttpRequest, credentials: web::Json<LoginRequest>) -> HttpRe
         .unwrap_or_else(|| "unknown".to_string());
     let mut attempts = LOGIN_ATTEMPTS.lock().unwrap();
     let now = Utc::now().timestamp();
+
     if let Some((count, expiry)) = attempts.get(&ip) {
         if *count >= 5 && now < *expiry {
             return HttpResponse::TooManyRequests().body("Trop de tentatives, réessayez dans 10 minutes.");
         }
     }
+
     if verify_password(&credentials.password) {
         let access_token = generate_access_token();
         let csrf_token = generate_csrf_token();
         *SERVER_TOKEN.lock().unwrap() = access_token;
         *CSRF_TOKEN.lock().unwrap() = csrf_token;
+
         let access_cookie = Cookie::build("access_token", SERVER_TOKEN.lock().unwrap().value.clone())
             .http_only(true)
             .secure(false)
             .same_site(SameSite::Strict)
             .path("/")
             .finish();
+
         let csrf_cookie = Cookie::build("csrf_token", CSRF_TOKEN.lock().unwrap().clone())
             .http_only(false)
             .secure(false)
             .same_site(SameSite::Strict)
             .path("/")
             .finish();
+
         attempts.remove(&ip);
+
         return HttpResponse::Ok()
             .cookie(access_cookie)
             .cookie(csrf_cookie)
             .body("Authentifié avec succès");
     }
+
     let entry = attempts.entry(ip.clone()).or_insert((0, now + 600));
     entry.0 += 1;
     if entry.0 >= 5 {
         entry.1 = now + 600;
         return HttpResponse::TooManyRequests().body("Trop de tentatives, réessayez plus tard");
     }
+
     HttpResponse::Unauthorized().body("Mot de passe incorrect")
 }
 
@@ -225,6 +233,7 @@ async fn check_auth(req: HttpRequest) -> HttpResponse {
     } else {
         return HttpResponse::Forbidden().body("Accès refusé");
     }
+
     if let Some(csrf_header) = req.headers().get("X-CSRF-Token") {
         let csrf_str = csrf_header.to_str().unwrap_or("");
         let csrf_guard = CSRF_TOKEN.lock().unwrap();
@@ -234,6 +243,7 @@ async fn check_auth(req: HttpRequest) -> HttpResponse {
     } else {
         return HttpResponse::Forbidden().body("CSRF token manquant");
     }
+
     HttpResponse::Ok().body("Accès autorisé")
 }
 
@@ -246,6 +256,7 @@ async fn logout(req: HttpRequest) -> HttpResponse {
     } else {
         return HttpResponse::Forbidden().body("Permission denied");
     }
+
     if let Some(csrf_header) = req.headers().get("X-CSRF-Token") {
         let csrf_str = csrf_header.to_str().unwrap_or("");
         let csrf_guard = CSRF_TOKEN.lock().unwrap();
@@ -255,15 +266,18 @@ async fn logout(req: HttpRequest) -> HttpResponse {
     } else {
         return HttpResponse::Forbidden().body("CSRF token manquant");
     }
+
     {
         let mut token_data = SERVER_TOKEN.lock().unwrap();
         token_data.value = String::new();
         token_data.expires_at = 0;
     }
+
     {
         let mut csrf_token = CSRF_TOKEN.lock().unwrap();
         *csrf_token = String::new();
     }
+
     let access_cookie = Cookie::build("access_token", "")
         .http_only(true)
         .secure(false)
@@ -271,6 +285,7 @@ async fn logout(req: HttpRequest) -> HttpResponse {
         .path("/")
         .max_age(TimeDuration::seconds(0))
         .finish();
+
     let csrf_cookie = Cookie::build("csrf_token", "")
         .http_only(false)
         .secure(false)
@@ -278,6 +293,7 @@ async fn logout(req: HttpRequest) -> HttpResponse {
         .path("/")
         .max_age(TimeDuration::seconds(0))
         .finish();
+
     HttpResponse::Ok()
         .cookie(access_cookie)
         .cookie(csrf_cookie)
@@ -322,24 +338,87 @@ async fn list_users(pool: web::Data<DbPool>) -> HttpResponse {
 async fn create_user(pool: web::Data<DbPool>, data: web::Json<CreateUserRequest>) -> HttpResponse {
     use schema::users::dsl::*;
     let mut conn = pool.get().expect("Connexion échouée");
+
     // Vérifier si l'utilisateur existe déjà
     if let Ok(_) = users.filter(username.eq(&data.username)).first::<User>(&mut conn) {
         return HttpResponse::BadRequest().body("Cet utilisateur existe déjà.");
     }
+
     // Hachage du mot de passe avec bcrypt pour les utilisateurs (non-admin)
     let hashed_password = match bcrypt::hash(&data.password, bcrypt::DEFAULT_COST) {
         Ok(h) => h,
         Err(_) => return HttpResponse::InternalServerError().body("Erreur de hashage"),
     };
+
     let new_user = NewUser {
         username: data.username.clone(),
         password_hash: hashed_password,
     };
+
     match diesel::insert_into(schema::users::table)
         .values(&new_user)
         .execute(&mut conn)
     {
         Ok(_) => HttpResponse::Ok().body("Utilisateur créé"),
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateUserWithRoleRequest {
+    username: String,
+    password: String,
+    role_id: i32,
+}
+
+#[post("/create_user_with_role")]
+async fn create_user_with_role(
+    pool: web::Data<DbPool>,
+    data: web::Json<CreateUserWithRoleRequest>,
+) -> HttpResponse {
+    use schema::users::dsl::*;
+    let mut conn = pool.get().expect("Connexion échouée");
+
+    // Vérifier si l'utilisateur existe déjà.
+    if let Ok(_) = users.filter(username.eq(&data.username)).first::<User>(&mut conn) {
+        return HttpResponse::BadRequest().body("Cet utilisateur existe déjà.");
+    }
+
+    // Hachage du mot de passe.
+    let hashed_password = match bcrypt::hash(&data.password, bcrypt::DEFAULT_COST) {
+        Ok(h) => h,
+        Err(_) => return HttpResponse::InternalServerError().body("Erreur de hashage"),
+    };
+
+    let new_user = NewUser {
+        username: data.username.clone(),
+        password_hash: hashed_password,
+    };
+
+    match diesel::insert_into(schema::users::table)
+        .values(&new_user)
+        .execute(&mut conn)
+    {
+        Ok(_) => {
+            // Récupérer l'utilisateur inséré.
+            let inserted_user: User = match users.filter(username.eq(&data.username)).first(&mut conn) {
+                Ok(u) => u,
+                Err(err) => return HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+            };
+
+            // Affecter le rôle si role_id != 0.
+            if data.role_id != 0 {
+                use schema::user_roles::dsl::*;
+                let new_assignment = (user_id.eq(inserted_user.user_id), role_id.eq(data.role_id));
+                if let Err(err) = diesel::insert_into(schema::user_roles::table)
+                    .values(&new_assignment)
+                    .execute(&mut conn)
+                {
+                    return HttpResponse::InternalServerError().body(format!("Erreur d'assignation du rôle: {}", err));
+                }
+            }
+            HttpResponse::Ok().body("Utilisateur créé avec rôle")
+        },
         Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
     }
 }
@@ -408,7 +487,7 @@ async fn delete_role(pool: web::Data<DbPool>, role_id_param: web::Path<i32>) -> 
 }
 
 // ==========================================================================
-// Endpoints pour la gestion des affectations de rôles aux utilisateurs
+// Endpoints pour lier/délier les rôles aux utilisateurs
 // ==========================================================================
 
 #[derive(Deserialize)]
@@ -421,19 +500,39 @@ struct AssignRoleRequest {
 async fn assign_role(pool: web::Data<DbPool>, data: web::Json<AssignRoleRequest>) -> HttpResponse {
     use schema::user_roles::dsl::*;
     let mut conn = pool.get().expect("Connexion échouée");
-    // Vérifier si l'affectation existe déjà
-    if let Ok(_) = user_roles.filter(user_id.eq(data.user_id))
-                             .filter(role_id.eq(data.role_id))
-                             .first::<(i32, i32)>(&mut conn)
-    {
-        return HttpResponse::BadRequest().body("Le rôle est déjà attribué à cet utilisateur");
-    }
-    let new_assignment = (user_id.eq(data.user_id), role_id.eq(data.role_id));
-    match diesel::insert_into(user_roles)
-        .values(&new_assignment)
-        .execute(&mut conn)
-    {
-        Ok(_) => HttpResponse::Ok().body("Rôle attribué"),
+
+    // Vérifier si une affectation existe déjà pour cet utilisateur
+    let existing_assignment = user_roles
+        .filter(user_id.eq(data.user_id))
+        .first::<(i32, i32)>(&mut conn)
+        .optional();
+
+    match existing_assignment {
+        Ok(Some((_user, existing_role))) => {
+            if existing_role == data.role_id {
+                HttpResponse::BadRequest().body("Le rôle est déjà attribué à cet utilisateur")
+            } else {
+                // Mise à jour du rôle existant
+                match diesel::update(user_roles.filter(user_id.eq(data.user_id)))
+                    .set(role_id.eq(data.role_id))
+                    .execute(&mut conn)
+                {
+                    Ok(_) => HttpResponse::Ok().body("Rôle mis à jour"),
+                    Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+                }
+            }
+        },
+        Ok(None) => {
+            // Aucune affectation existante, insertion d'une nouvelle affectation
+            let new_assignment = (user_id.eq(data.user_id), role_id.eq(data.role_id));
+            match diesel::insert_into(user_roles)
+                .values(&new_assignment)
+                .execute(&mut conn)
+            {
+                Ok(_) => HttpResponse::Ok().body("Rôle attribué"),
+                Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+            }
+        },
         Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
     }
 }
@@ -444,10 +543,13 @@ async fn get_user_roles(pool: web::Data<DbPool>, user_id_param: web::Path<i32>) 
     use schema::roles::dsl::{roles as roles_table, role_id as r_role_id, role_name};
     let mut conn = pool.get().expect("Connexion échouée");
     let uid = user_id_param.into_inner();
-    let results = roles_table.inner_join(user_roles.on(r_role_id.eq(role_id)))
+
+    let results = roles_table
+        .inner_join(user_roles.on(r_role_id.eq(role_id)))
         .filter(schema::user_roles::dsl::user_id.eq(uid))
         .select((r_role_id, role_name))
         .load::<(i32, String)>(&mut conn);
+
     match results {
         Ok(vec) => {
             let roles: Vec<_> = vec.into_iter().map(|(id, name)| {
@@ -464,6 +566,7 @@ async fn remove_role(pool: web::Data<DbPool>, params: web::Path<(i32, i32)>) -> 
     use schema::user_roles::dsl::*;
     let mut conn = pool.get().expect("Connexion échouée");
     let (uid, rid) = params.into_inner();
+
     match diesel::delete(user_roles.filter(user_id.eq(uid)).filter(role_id.eq(rid)))
         .execute(&mut conn)
     {
@@ -486,6 +589,7 @@ struct AssignPermissionRequest {
 async fn assign_permission(pool: web::Data<DbPool>, data: web::Json<AssignPermissionRequest>) -> HttpResponse {
     use schema::role_permissions::dsl::*;
     let mut conn = pool.get().expect("Connexion échouée");
+
     if let Ok(_) = role_permissions
         .filter(schema::role_permissions::dsl::role_id.eq(data.role_id))
         .filter(schema::role_permissions::dsl::permission_id.eq(data.permission_id))
@@ -493,8 +597,12 @@ async fn assign_permission(pool: web::Data<DbPool>, data: web::Json<AssignPermis
     {
         return HttpResponse::BadRequest().body("La permission est déjà attribuée à ce rôle");
     }
-    let new_assignment = (schema::role_permissions::dsl::role_id.eq(data.role_id),
-                          schema::role_permissions::dsl::permission_id.eq(data.permission_id));
+
+    let new_assignment = (
+        schema::role_permissions::dsl::role_id.eq(data.role_id),
+        schema::role_permissions::dsl::permission_id.eq(data.permission_id),
+    );
+
     match diesel::insert_into(role_permissions)
         .values(&new_assignment)
         .execute(&mut conn)
@@ -510,10 +618,13 @@ async fn get_role_permissions(pool: web::Data<DbPool>, role_id_param: web::Path<
     use schema::permissions::dsl::{permissions as permissions_table, permission_id as p_permission_id, permission_name};
     let mut conn = pool.get().expect("Connexion échouée");
     let rid = role_id_param.into_inner();
-    let results = permissions_table.inner_join(role_permissions.on(p_permission_id.eq(permission_id)))
+
+    let results = permissions_table
+        .inner_join(role_permissions.on(p_permission_id.eq(permission_id)))
         .filter(schema::role_permissions::dsl::role_id.eq(rid))
         .select((p_permission_id, permission_name))
         .load::<(i32, String)>(&mut conn);
+
     match results {
         Ok(vec) => {
             let perms: Vec<_> = vec.into_iter().map(|(id, name)| {
@@ -530,6 +641,7 @@ async fn remove_permission(pool: web::Data<DbPool>, params: web::Path<(i32, i32)
     use schema::role_permissions::dsl::*;
     let mut conn = pool.get().expect("Connexion échouée");
     let (rid, pid) = params.into_inner();
+
     match diesel::delete(role_permissions.filter(role_id.eq(rid)).filter(permission_id.eq(pid)))
         .execute(&mut conn)
     {
@@ -537,6 +649,203 @@ async fn remove_permission(pool: web::Data<DbPool>, params: web::Path<(i32, i32)
         Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
     }
 }
+
+// ==========================================================================
+// Structures et Endpoints pour la gestion des polices par défaut (default_policies)
+// ==========================================================================
+
+#[derive(Queryable, serde::Serialize)]
+struct DefaultPoliciesData {
+    pub role_id: i32,
+    pub default_ro: String,
+    pub default_rw: String,
+    pub tcp_bind: String,
+    pub tcp_connect: String,
+    pub allowed_ips: String,
+    pub allowed_domains: String,
+}
+
+
+#[derive(Insertable, Deserialize)]
+#[diesel(table_name = schema::default_policies)]
+struct NewDefaultPolicy {
+    role_id: i32,
+    default_ro: String,
+    default_rw: String,
+    tcp_bind: String,
+    tcp_connect: String,
+    allowed_ips: String,
+    allowed_domains: String,
+}
+
+#[derive(Deserialize)]
+struct CreateRoleWithDefaultPoliciesRequest {
+    role_name: String,
+    default_ro: String,
+    default_rw: String,
+    tcp_bind: String,
+    tcp_connect: String,
+    allowed_ips: String,
+    allowed_domains: String,
+}
+
+#[derive(AsChangeset)]
+#[diesel(table_name = schema::default_policies)]
+struct DefaultPoliciesUpdate {
+    // Les champs optionnels pour la mise à jour
+    default_ro: Option<String>,
+    default_rw: Option<String>,
+    tcp_bind: Option<String>,
+    tcp_connect: Option<String>,
+    allowed_ips: Option<String>,
+    allowed_domains: Option<String>,
+}
+
+#[get("/default_policies/{role_id}")]
+async fn get_default_policies(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+) -> impl Responder {
+    use schema::default_policies::dsl::*;
+    let rid = path.into_inner();
+    let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
+
+    // On tente de récupérer la ligne (ou None s'il n'y en a pas).
+    let result = default_policies
+        .filter(role_id.eq(rid))
+        .first::<DefaultPoliciesData>(&mut conn)
+        .optional();
+
+    match result {
+        Ok(Some(data)) => HttpResponse::Ok().json(data),
+        Ok(None) => HttpResponse::NotFound().body(format!("Aucune default_policies pour le role_id = {}", rid)),
+        Err(err) => HttpResponse::InternalServerError()
+                        .body(format!("Erreur de base de données: {}", err)),
+    }
+}
+
+
+
+#[post("/roles_with_default_policies")]
+async fn create_role_with_default_policies(
+    pool: web::Data<DbPool>,
+    data: web::Json<CreateRoleWithDefaultPoliciesRequest>
+) -> HttpResponse {
+    use schema::roles::dsl as rdsl;
+    use schema::default_policies::dsl as dpdsl;
+
+    let mut conn = pool.get().expect("Connexion échouée");
+    let payload = data.into_inner();
+
+    // Vérifier si le nom de rôle existe déjà
+    let existing_role = rdsl::roles
+        .filter(rdsl::role_name.eq(&payload.role_name))
+        .first::<Role>(&mut conn)
+        .optional();
+
+    match existing_role {
+        Ok(Some(_)) => {
+            // Si le rôle existe déjà, on renvoie une erreur
+            return HttpResponse::BadRequest().body("Ce rôle existe déjà.");
+        }
+        Ok(None) => {
+            // Insérer un nouveau rôle
+            let new_role = NewRole {
+                role_name: payload.role_name.clone(),
+            };
+            match diesel::insert_into(rdsl::roles)
+                .values(&new_role)
+                .returning((rdsl::role_id, rdsl::role_name))
+                .get_result::<(i32, String)>(&mut conn)
+            {
+                Ok((rid, _rname)) => {
+                    // Insérer les default policies pour ce rôle
+                    let new_default_policy = NewDefaultPolicy {
+                        role_id: rid,
+                        default_ro: payload.default_ro,
+                        default_rw: payload.default_rw,
+                        tcp_bind: payload.tcp_bind,
+                        tcp_connect: payload.tcp_connect,
+                        allowed_ips: payload.allowed_ips,
+                        allowed_domains: payload.allowed_domains,
+                    };
+
+                    match diesel::insert_into(dpdsl::default_policies)
+                        .values(&new_default_policy)
+                        .execute(&mut conn)
+                    {
+                        Ok(_) => HttpResponse::Ok().body("Rôle créé avec default policies"),
+                        Err(err) => HttpResponse::InternalServerError().body(format!(
+                            "Erreur d'insertion des default policies: {}",
+                            err
+                        )),
+                    }
+                }
+                Err(err) => {
+                    HttpResponse::InternalServerError().body(format!("Erreur lors de la création du rôle: {}", err))
+                }
+            }
+        }
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateDefaultPoliciesRequest {
+    default_ro: Option<String>,
+    default_rw: Option<String>,
+    tcp_bind: Option<String>,
+    tcp_connect: Option<String>,
+    allowed_ips: Option<String>,
+    allowed_domains: Option<String>,
+}
+
+#[put("/default_policies/{role_id}")]
+async fn update_default_policies(
+    pool: web::Data<DbPool>,
+    role_id_param: web::Path<i32>,
+    data: web::Json<UpdateDefaultPoliciesRequest>
+) -> HttpResponse {
+    use schema::default_policies::dsl::*;
+    let mut conn = pool.get().expect("Connexion échouée");
+
+    let rid = role_id_param.into_inner();
+
+    // Vérifier si la ligne existe (si vous voulez renvoyer une 404 en cas d'inexistence)
+    let exists = default_policies
+        .filter(schema::default_policies::dsl::role_id.eq(rid))
+        .first::<(i32, String, String, String, String, String, String)>(&mut conn)
+        .optional();
+
+    match exists {
+        Ok(Some(_)) => {
+            // Construire le "patch" Changeset
+            let changeset = DefaultPoliciesUpdate {
+                default_ro: data.default_ro.clone(),
+                default_rw: data.default_rw.clone(),
+                tcp_bind: data.tcp_bind.clone(),
+                tcp_connect: data.tcp_connect.clone(),
+                allowed_ips: data.allowed_ips.clone(),
+                allowed_domains: data.allowed_domains.clone(),
+            };
+
+            // Effectuer la mise à jour avec Diesel
+            match diesel::update(default_policies.filter(schema::default_policies::dsl::role_id.eq(rid)))
+                .set(&changeset)
+                .execute(&mut conn)
+            {
+                Ok(_) => HttpResponse::Ok().body("Default policies mises à jour"),
+                Err(err) => HttpResponse::InternalServerError().body(format!(
+                    "Erreur lors de la mise à jour des default policies: {}",
+                    err
+                )),
+            }
+        }
+        Ok(None) => HttpResponse::NotFound().body(format!("Aucune default_policies trouvée pour role_id={}", rid)),
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur: {}", err)),
+    }
+}
+
 
 // ==========================================================================
 // Endpoints de gestion de configuration (App Policies)
@@ -575,6 +884,7 @@ async fn get_envs(pool: web::Data<DbPool>) -> impl Responder {
     use schema::app_policy::dsl::*;
     let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
     let results = app_policy.load::<AppPolicy>(&mut conn);
+
     match results {
         Ok(policies) => HttpResponse::Ok().json(policies),
         Err(err) => HttpResponse::InternalServerError()
@@ -590,9 +900,11 @@ async fn get_env_content(
     use schema::app_policy::dsl::*;
     let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
     let program_name = program.into_inner();
+
     let result = app_policy
         .filter(app_name.eq(&program_name))
         .first::<AppPolicy>(&mut conn);
+
     match result {
         Ok(policy) => HttpResponse::Ok().json(policy),
         Err(_) => HttpResponse::NotFound().body("Aucune règle trouvée"),
@@ -606,10 +918,13 @@ async fn create_env(
 ) -> impl Responder {
     use schema::app_policy::dsl::*;
     let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
+
     let new_policy = data.into_inner();
+
     let result = diesel::insert_into(app_policy)
         .values(&new_policy)
         .execute(&mut conn);
+
     match result {
         Ok(_) => HttpResponse::Ok().body("Configuration ajoutée"),
         Err(err) => HttpResponse::InternalServerError()
@@ -634,14 +949,17 @@ async fn update_env(
     use schema::app_policy::dsl::*;
     let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
     let program_name = program.into_inner();
+
     if app_policy.filter(app_name.eq(&program_name)).first::<AppPolicy>(&mut conn).is_err() {
         return HttpResponse::NotFound().body(format!("Aucune règle trouvée pour '{}'", program_name));
     }
+
     let update = data.into_inner();
     let new_ro = update.ll_fs_ro.join(":");
     let new_rw = update.ll_fs_rw.join(":");
     let new_tcp_bind = update.ll_tcp_bind.unwrap_or_else(|| "9418".to_string());
     let new_tcp_connect = update.ll_tcp_connect.unwrap_or_else(|| "80:443".to_string());
+
     let result = diesel::update(app_policy.filter(app_name.eq(&program_name)))
         .set((
             default_ro.eq(new_ro),
@@ -651,6 +969,7 @@ async fn update_env(
             updated_at.eq(chrono::Utc::now().naive_utc()),
         ))
         .execute(&mut conn);
+
     match result {
         Ok(_) => HttpResponse::Ok().body("Configuration mise à jour"),
         Err(err) => HttpResponse::InternalServerError()
@@ -666,8 +985,10 @@ async fn delete_env(
     use schema::app_policy::dsl::*;
     let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
     let program_name = program.into_inner();
+
     let result = diesel::delete(app_policy.filter(app_name.eq(&program_name)))
         .execute(&mut conn);
+
     match result {
         Ok(_) => HttpResponse::Ok().body("Configuration supprimée"),
         Err(err) => HttpResponse::InternalServerError()
@@ -689,6 +1010,7 @@ async fn main() -> std::io::Result<()> {
     let pool = r2d2::Pool::builder()
         .build(manager)
         .expect("Échec de connexion à la BDD");
+
     HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_origin("http://127.0.0.1:8080")
@@ -700,28 +1022,40 @@ async fn main() -> std::io::Result<()> {
             ])
             .supports_credentials()
             .max_age(3600);
+
         App::new()
             .wrap(cors)
             .app_data(web::Data::new(pool.clone()))
+            // Routes non protégées
             .service(login)
             .service(check_auth)
             .service(logout)
+            // Routes protégées
             .service(
                 web::scope("")
                     .wrap(AuthMiddleware)
                     .service(protected_route)
+                    // Gestion des utilisateurs
                     .service(list_users)
                     .service(create_user)
                     .service(delete_user)
+                    .service(create_user_with_role)
+                    // Gestion des rôles
                     .service(list_roles)
                     .service(create_role)
                     .service(delete_role)
+                    .service(get_default_policies)
+                    .service(create_role_with_default_policies)
+                    .service(update_default_policies)
+                    // Assignation de rôles aux utilisateurs
                     .service(assign_role)
                     .service(get_user_roles)
                     .service(remove_role)
+                    // Gestion des permissions
                     .service(assign_permission)
                     .service(get_role_permissions)
                     .service(remove_permission)
+                    // Gestion des App Policies
                     .service(get_envs)
                     .service(get_env_content)
                     .service(create_env)
