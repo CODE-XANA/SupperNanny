@@ -81,7 +81,10 @@ pub fn main_layout(props: &MainLayoutProps) -> Html {
                 <nav class="nav">
                     <ul class="nav-list">
                         <li class="nav-item">
-                            <Link<Route> to={Route::Home}>{ "Configurations" }</Link<Route>>
+                            <Link<Route> to={Route::Dashboard}>{ "Dashboard" }</Link<Route>>
+                        </li>
+                        <li class="nav-item">
+                            <Link<Route> to={Route::Configurations}>{ "Configurations" }</Link<Route>>
                         </li>
                         <li class="nav-item">
                             <Link<Route> to={Route::ManageUsers}>{ "Gestion des utilisateurs" }</Link<Route>>

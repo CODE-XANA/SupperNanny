@@ -932,26 +932,56 @@ async fn create_env(
     }
 }
 
+#[get("/env_id/{policy_id}")]
+async fn get_env_by_id(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+) -> impl Responder {
+    use schema::app_policy::dsl::*;
+    let policy_id_param = path.into_inner();
+
+    let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
+
+    let result = app_policy
+        .filter(policy_id.eq(policy_id_param))
+        .first::<AppPolicy>(&mut conn);
+
+    match result {
+        Ok(policy_data) => HttpResponse::Ok().json(policy_data),
+        Err(diesel::result::Error::NotFound) => HttpResponse::NotFound().body("Aucune règle trouvée"),
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur : {}", err)),
+    }
+}
+
 #[derive(Deserialize)]
-struct UpdateEnvData {
+struct UpdateEnvDataById {
+    // On reproduit la même structure que votre UpdateEnvData existant,
+    // sauf qu'on n'a plus besoin de "program" dans l'URL.
     ll_fs_ro: Vec<String>,
     ll_fs_rw: Vec<String>,
     ll_tcp_bind: Option<String>,
     ll_tcp_connect: Option<String>,
+    allowed_ips: Option<String>,
+    allowed_domains: Option<String>,
 }
 
-#[put("/env/{program}")]
-async fn update_env(
+#[put("/env_id/{policy_id}")]
+async fn update_env_by_id(
     pool: web::Data<DbPool>,
-    program: web::Path<String>,
-    data: web::Json<UpdateEnvData>,
+    path: web::Path<i32>,
+    data: web::Json<UpdateEnvDataById>,
 ) -> impl Responder {
     use schema::app_policy::dsl::*;
+    let policy_id_param = path.into_inner();
     let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
-    let program_name = program.into_inner();
 
-    if app_policy.filter(app_name.eq(&program_name)).first::<AppPolicy>(&mut conn).is_err() {
-        return HttpResponse::NotFound().body(format!("Aucune règle trouvée pour '{}'", program_name));
+    // Vérifie existence de l'enregistrement
+    if app_policy
+        .filter(policy_id.eq(policy_id_param))
+        .first::<AppPolicy>(&mut conn)
+        .is_err()
+    {
+        return HttpResponse::NotFound().body(format!("Aucune règle trouvée pour ID={}", policy_id_param));
     }
 
     let update = data.into_inner();
@@ -959,42 +989,52 @@ async fn update_env(
     let new_rw = update.ll_fs_rw.join(":");
     let new_tcp_bind = update.ll_tcp_bind.unwrap_or_else(|| "9418".to_string());
     let new_tcp_connect = update.ll_tcp_connect.unwrap_or_else(|| "80:443".to_string());
+    let new_ips = update.allowed_ips.unwrap_or_default();
+    let new_domains = update.allowed_domains.unwrap_or_default();
 
-    let result = diesel::update(app_policy.filter(app_name.eq(&program_name)))
+    let result = diesel::update(app_policy.filter(policy_id.eq(policy_id_param)))
         .set((
             default_ro.eq(new_ro),
             default_rw.eq(new_rw),
             tcp_bind.eq(new_tcp_bind),
             tcp_connect.eq(new_tcp_connect),
+            allowed_ips.eq(new_ips),
+            allowed_domains.eq(new_domains),
             updated_at.eq(chrono::Utc::now().naive_utc()),
         ))
         .execute(&mut conn);
 
     match result {
         Ok(_) => HttpResponse::Ok().body("Configuration mise à jour"),
-        Err(err) => HttpResponse::InternalServerError()
-                        .body(format!("Erreur lors de la mise à jour : {}", err)),
+        Err(err) => HttpResponse::InternalServerError().body(format!("Erreur lors de la mise à jour : {}", err)),
     }
 }
 
-#[delete("/env/{program}")]
-async fn delete_env(
+#[delete("/env_id/{policy_id}")]
+async fn delete_env_by_id(
     pool: web::Data<DbPool>,
-    program: web::Path<String>,
+    path: web::Path<i32>,
 ) -> impl Responder {
     use schema::app_policy::dsl::*;
+    let policy_id_param = path.into_inner();
     let mut conn = pool.get().expect("Impossible d'obtenir la connexion DB");
-    let program_name = program.into_inner();
 
-    let result = diesel::delete(app_policy.filter(app_name.eq(&program_name)))
+    let result = diesel::delete(app_policy.filter(policy_id.eq(policy_id_param)))
         .execute(&mut conn);
 
     match result {
-        Ok(_) => HttpResponse::Ok().body("Configuration supprimée"),
+        Ok(rows_affected) => {
+            if rows_affected == 0 {
+                HttpResponse::NotFound().body("Aucune configuration à supprimer")
+            } else {
+                HttpResponse::Ok().body("Configuration supprimée")
+            }
+        }
         Err(err) => HttpResponse::InternalServerError()
                         .body(format!("Erreur lors de la suppression : {}", err)),
     }
 }
+
 
 // ==========================================================================
 // Main : configuration du serveur HTTP
@@ -1057,10 +1097,10 @@ async fn main() -> std::io::Result<()> {
                     .service(remove_permission)
                     // Gestion des App Policies
                     .service(get_envs)
-                    .service(get_env_content)
                     .service(create_env)
-                    .service(update_env)
-                    .service(delete_env)
+                    .service(get_env_by_id)
+                    .service(update_env_by_id)
+                    .service(delete_env_by_id)
             )
     })
     .bind(("127.0.0.1", 8081))?

@@ -2,7 +2,8 @@ use yew::prelude::*;
 use yew_router::prelude::*;
 
 mod auth;
-mod home;
+mod dashboard;
+mod configurations;
 mod manage_users;
 mod manage_roles;
 mod layout;
@@ -14,8 +15,10 @@ mod logout;
 pub enum Route {
     #[at("/")]
     Login,
-    #[at("/home")]
-    Home,
+    #[at("/dashboard")]
+    Dashboard,
+    #[at("/configurations")]
+    Configurations,
     #[at("/users")]
     ManageUsers,
     #[at("/roles")]
@@ -40,9 +43,14 @@ fn switch(route: Route) -> Html {
         Route::Login => html! {
             <auth::LoginForm />
         },
-        Route::Home => html! {
+        Route::Dashboard => html! {
             <layout::MainLayout>
-                <home::Home />
+                <dashboard::Dashboard />
+            </layout::MainLayout>
+        },
+        Route::Configurations => html! {
+            <layout::MainLayout>
+                <configurations::Configurations /> 
             </layout::MainLayout>
         },
         Route::ManageUsers => html! {
@@ -58,6 +66,7 @@ fn switch(route: Route) -> Html {
         Route::NotFound => html! { <h1>{ "404 - Not Found" }</h1> },
     }
 }
+
 
 fn main() {
     yew::Renderer::<App>::new().render();

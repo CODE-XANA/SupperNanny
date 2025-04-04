@@ -41,7 +41,7 @@ pub fn login_form() -> Html {
                         log!("Connexion réussie !");
                         message_async.set("Connexion réussie".to_string());
                         // Rediriger vers la page des environnements
-                        navigator.push(&Route::Home);
+                        navigator.push(&Route::Dashboard);
                     }
                     Ok(resp) => {
                         log!(format!("Échec de la connexion : statut {}", resp.status()));

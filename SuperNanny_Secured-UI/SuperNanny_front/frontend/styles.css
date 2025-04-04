@@ -344,6 +344,12 @@ ul li:hover {
   outline: none;
 }
 
+.toggle-button:hover {
+  background-color: transparent !important;
+  color: #555 !important;
+  transform: none !important;
+}
+
 #config-details .toggle-button:hover,
 #config-details .toggle-button:focus {
   color: #555 !important;
@@ -351,6 +357,7 @@ ul li:hover {
   outline: none !important;
   border: none !important;
 }
+
 
 /* ---------------------------------------------------- */
 /* 11. Adaptabilité sur mobile                           */
