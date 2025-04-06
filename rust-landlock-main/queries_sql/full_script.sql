@@ -126,9 +126,9 @@ INSERT INTO role_permissions (role_id, permission_id) VALUES
 
 -- Users
 INSERT INTO users (user_id, username, password_hash) VALUES
-  (1, 'admin',     '$2a$12$NzDv/E0QM5N2vCtqqpqJeeVvQ6OIJYCs22Z1L7j8wIHpcxJXYKAJO'),
-  (2, 'developer', '$2a$12$yBBX3U8PoI1VGX9arthf4e4iqJjB9uzhcYAetUVSJt32qe97DGYNu'),
-  (3, 'regular',   '$2a$12$nmuZC4yuHPlN8EXY6FcfY.KR6o7bZoOE/J0W07EnBJmXdHDTmPC22');
+  (1, 'admin',     '$2a$12$Gp.L8taKXJqc/N/T40fbyekjONH1PaioOfDcvHkubYVDOurNXRoPi'),
+  (2, 'developer', '$2a$12$OtLIa4HYtsp3nnbx4zQYjOpID.eohUtJYbf5Vu.tgS/hZZ0XLgEVe'),
+  (3, 'regular',   '$2a$12$tfr8QKoe8jy66nlHXOIlMeAHfxn5vj7inaLuBco3eiDmAJJVEDdBy');
 
 -- User Roles
 INSERT INTO user_roles (user_id, role_id) VALUES
