@@ -15,7 +15,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use hostname::get as get_hostname_raw;
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
 use once_cell::sync::Lazy;

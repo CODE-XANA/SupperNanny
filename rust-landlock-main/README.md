@@ -73,12 +73,12 @@ sudo ln -sf "$(realpath target/release/sandboxer_db)" /usr/local/bin/supernanny
    In your project directory, add a `.env` file with your DB connection info:
 
    ```ini
-   DB_HOST=localhost
+   DB_HOST=127.0.0.1
    DB_PORT=5432
-   DB_USER=postgres
-   DB_PASS=mysecretpassword
+   DB_USER=sandboxuser
+   DB_PASS=supernanny
    DB_NAME=sandboxdb
-   DB_SSL_MODE=prefer
+   STRACE_PATH=/usr/bin/strace
    ```
 
 2. **Run the SQL Setup Script** (if provided):  
