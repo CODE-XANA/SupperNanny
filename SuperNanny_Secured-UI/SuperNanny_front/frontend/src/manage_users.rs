@@ -6,10 +6,10 @@ use serde_json::json;
 use log::{error, info};
 use std::collections::HashMap;
 use futures::future::join_all;
+use gloo_timers::callback::Interval;
 
 use crate::utils::get_cookies;
 
-/// État d'authentification (on force à Valid pour simplifier)
 #[derive(Copy, Clone, PartialEq)]
 enum AuthStatus {
     Loading,
@@ -17,7 +17,6 @@ enum AuthStatus {
     Invalid,
 }
 
-/// Modèle d'utilisateur
 #[derive(Clone, PartialEq, serde::Deserialize, serde::Serialize, Debug)]
 pub struct User {
     pub user_id: i32,
@@ -25,14 +24,12 @@ pub struct User {
     pub password_hash: String,
 }
 
-/// Modèle de rôle
 #[derive(Clone, PartialEq, serde::Deserialize, serde::Serialize, Debug)]
 pub struct Role {
     pub role_id: i32,
     pub role_name: String,
 }
 
-/// Extrait le CSRF token depuis les cookies
 fn extract_csrf(cookies: &str) -> String {
     cookies
         .split("; ")
@@ -41,7 +38,6 @@ fn extract_csrf(cookies: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Recharge les rôles, utilisateurs et l’affectation (user→role).
 async fn reload_all_data(
     roles_state: UseStateHandle<Vec<Role>>,
     users_state: UseStateHandle<Vec<User>>,
@@ -114,7 +110,6 @@ async fn reload_all_data(
     }
 }
 
-/// Retourne le nom du rôle pour un utilisateur
 fn get_user_role_name(user_id: i32, user_roles: &HashMap<i32, i32>, roles: &[Role]) -> String {
     let role_id = user_roles.get(&user_id).copied().unwrap_or(0);
     if role_id == 0 {
@@ -129,7 +124,8 @@ fn get_user_role_name(user_id: i32, user_roles: &HashMap<i32, i32>, roles: &[Rol
 
 #[function_component(ManageUsers)]
 pub fn manage_users() -> Html {
-    let auth_status = use_state(|| AuthStatus::Valid);
+    // Commence en Loading
+    let auth_status = use_state(|| AuthStatus::Loading);
 
     let roles = use_state(|| Vec::<Role>::new());
     let users = use_state(|| Vec::<User>::new());
@@ -138,12 +134,60 @@ pub fn manage_users() -> Html {
     // States pour le formulaire
     let new_username = use_state(|| "".to_string());
     let new_password = use_state(|| "".to_string());
-    // -1 => placeholder
     let new_role = use_state(|| -1);
-
     let select_ref = use_node_ref();
 
-    // Au montage => recharger
+    // --- Vérification initiale de l'authentification ---
+    {
+        let auth_status_clone = auth_status.clone();
+        use_effect_with_deps(
+            move |_| {
+                spawn_local(async move {
+                    let cookies = get_cookies().unwrap_or_default();
+                    let csrf_token = extract_csrf(&cookies);
+                    let resp = Request::get("http://127.0.0.1:8081/check_auth")
+                        .header("X-CSRF-Token", &csrf_token)
+                        .credentials(RequestCredentials::Include)
+                        .send()
+                        .await;
+                    match resp {
+                        Ok(r) if r.status() == 200 => auth_status_clone.set(AuthStatus::Valid),
+                        _ => auth_status_clone.set(AuthStatus::Invalid),
+                    }
+                });
+                || ()
+            },
+            (),
+        );
+    }
+    // --- Vérification périodique toutes les 10 secondes ---
+    {
+        let auth_status_clone = auth_status.clone();
+        use_effect_with_deps(
+            move |_| {
+                let interval = Interval::new(10_000, move || {
+                    let auth_status_inner = auth_status_clone.clone();
+                    spawn_local(async move {
+                        let cookies = get_cookies().unwrap_or_default();
+                        let csrf_token = extract_csrf(&cookies);
+                        let resp = Request::get("http://127.0.0.1:8081/check_auth")
+                            .header("X-CSRF-Token", &csrf_token)
+                            .credentials(RequestCredentials::Include)
+                            .send()
+                            .await;
+                        match resp {
+                            Ok(r) if r.status() == 200 => auth_status_inner.set(AuthStatus::Valid),
+                            _ => auth_status_inner.set(AuthStatus::Invalid),
+                        }
+                    });
+                });
+                || drop(interval)
+            },
+            (),
+        );
+    }
+
+    // Recharge les données si l'authentification est validée
     {
         let roles_clone = roles.clone();
         let users_clone = users.clone();
@@ -159,11 +203,10 @@ pub fn manage_users() -> Html {
         );
     }
 
-    // Effet pour forcer la valeur du <select> = new_role
+    // Effet pour forcer la valeur du <select> égale à new_role
     {
         let select_ref = select_ref.clone();
         let current_val = (*new_role).to_string();
-        // On passe un tuple (String,) pour le use_effect_with_deps
         let dep = (current_val.clone(),);
         use_effect_with_deps(
             move |(cv,): &(String,)| {
@@ -177,7 +220,7 @@ pub fn manage_users() -> Html {
         );
     }
 
-    // OnChange => update new_role
+    // Handler pour changer le rôle dans le select
     let on_change_role = {
         let new_role = new_role.clone();
         Callback::from(move |e: Event| {
@@ -192,7 +235,6 @@ pub fn manage_users() -> Html {
         let roles_clone = roles.clone();
         let users_clone = users.clone();
         let user_roles_clone = user_roles.clone();
-
         let new_username_clone = new_username.clone();
         let new_password_clone = new_password.clone();
         let new_role_clone = new_role.clone();
@@ -218,7 +260,6 @@ pub fn manage_users() -> Html {
             spawn_local(async move {
                 let cookies = get_cookies().unwrap_or_default();
                 let csrf_token = extract_csrf(&cookies);
-
                 let body = json!({
                     "username": username_val,
                     "password": password_val,
@@ -283,97 +324,102 @@ pub fn manage_users() -> Html {
         })
     };
 
-    // Rendu final
     html! {
         <>
-            <div class="container" style="margin-top:2rem;">
-                <div class="columns" style="gap: 2rem;">
-                    // Colonne gauche : liste des utilisateurs
-                    <div class="column" id="user-list">
-                        <h2 class="title is-4 has-text-centered">{ "Liste des utilisateurs" }</h2>
-                        <ul>
-                        {
-                            for (*users).iter().cloned().map(|u| {
-                                let role_name = get_user_role_name(u.user_id, &user_roles, &roles);
-                                html! {
-                                    <li class="box" style="margin-bottom:0.5rem;">
-                                        <b>{ &u.username }</b>
-                                        { " → " }
-                                        <i>{ role_name }</i>
-                                        <button
-                                            class="button is-danger is-small"
-                                            style="margin-left: 1rem;"
-                                            onclick={Callback::from({
-                                                let on_delete_user = on_delete_user.clone();
-                                                move |_| { on_delete_user.emit(u.user_id); }
-                                            })}
-                                        >
-                                            { "Supprimer" }
-                                        </button>
-                                    </li>
-                                }
-                            })
-                        }
-                        </ul>
-                    </div>
+            {
+                match *auth_status {
+                    AuthStatus::Loading => html! { <p>{ "Chargement..." }</p> },
+                    AuthStatus::Invalid => html! { <p style="font-weight:bold;">{ "403 : Accès refusé" }</p> },
+                    AuthStatus::Valid => html! {
+                        <div class="container" style="margin-top:2rem;">
+                            <div class="columns" style="gap: 2rem;">
+                                // Colonne gauche : liste des utilisateurs
+                                <div class="column" id="user-list">
+                                    <h2 class="title is-4 has-text-centered">{ "Liste des utilisateurs" }</h2>
+                                    <ul>
+                                        { for (*users).iter().cloned().map(|u| {
+                                            let role_name = get_user_role_name(u.user_id, &user_roles, &roles);
+                                            html! {
+                                                <li class="box" style="margin-bottom:0.5rem;">
+                                                    <b>{ &u.username }</b>
+                                                    { " → " }
+                                                    <i>{ role_name }</i>
+                                                    <button
+                                                        class="button is-danger is-small"
+                                                        style="margin-left: 1rem;"
+                                                        onclick={Callback::from({
+                                                            let on_delete_user = on_delete_user.clone();
+                                                            move |_| { on_delete_user.emit(u.user_id); }
+                                                        })}
+                                                    >
+                                                        { "Supprimer" }
+                                                    </button>
+                                                </li>
+                                            }
+                                        }) }
+                                    </ul>
+                                </div>
 
-                    // Colonne droite : Formulaire de création
-                    <div class="column" id="user-create" style="max-width: 450px; margin: 0 auto;">
-                        <h2 class="title is-4 has-text-centered">{ "Créer un utilisateur" }</h2>
-                        <div class="box" style="margin-top:1rem;">
-                            <div class="form-group">
-                                <label>{ "Nom d'utilisateur" }</label>
-                                <input
-                                    type="text"
-                                    placeholder="Entrez le nom d'utilisateur"
-                                    value={(*new_username).clone()}
-                                    oninput={Callback::from({
-                                        let new_username = new_username.clone();
-                                        move |e: InputEvent| {
-                                            if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                new_username.set(input.value());
-                                            }
-                                        }
-                                    })}
-                                />
+                                // Colonne droite : Formulaire de création
+                                <div class="column" id="user-create" style="max-width: 450px; margin: 0 auto;">
+                                    <h2 class="title is-4 has-text-centered">{ "Créer un utilisateur" }</h2>
+                                    <div class="box" style="margin-top:1rem;">
+                                        <div class="form-group">
+                                            <label>{ "Nom d'utilisateur" }</label>
+                                            <input
+                                                type="text"
+                                                placeholder="Entrez le nom d'utilisateur"
+                                                value={(*new_username).clone()}
+                                                oninput={Callback::from({
+                                                    let new_username = new_username.clone();
+                                                    move |e: InputEvent| {
+                                                        if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                            new_username.set(input.value());
+                                                        }
+                                                    }
+                                                })}
+                                            />
+                                        </div>
+                                        <div class="form-group">
+                                            <label>{ "Mot de passe" }</label>
+                                            <input
+                                                type="password"
+                                                placeholder="Entrez le mot de passe"
+                                                value={(*new_password).clone()}
+                                                oninput={Callback::from({
+                                                    let new_password = new_password.clone();
+                                                    move |e: InputEvent| {
+                                                        if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                            new_password.set(input.value());
+                                                        }
+                                                    }
+                                                })}
+                                            />
+                                        </div>
+                                        <div class="form-group">
+                                            <label>{ "Rôle" }</label>
+                                            <select
+                                                ref={select_ref}
+                                                onchange={on_change_role}
+                                            >
+                                                <option key="placeholder" value="-1">{ "Sélectionner le rôle" }</option>
+                                                { for (*roles).iter().map(|r| html! {
+                                                    <option key={r.role_id} value={r.role_id.to_string()}>
+                                                        { &r.role_name }
+                                                    </option>
+                                                }) }
+                                            </select>
+                                        </div>
+                                        <button class="btn-create" onclick={on_create_user}>
+                                            { "Créer l'utilisateur avec un rôle" }
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="form-group">
-                                <label>{ "Mot de passe" }</label>
-                                <input
-                                    type="password"
-                                    placeholder="Entrez le mot de passe"
-                                    value={(*new_password).clone()}
-                                    oninput={Callback::from({
-                                        let new_password = new_password.clone();
-                                        move |e: InputEvent| {
-                                            if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                new_password.set(input.value());
-                                            }
-                                        }
-                                    })}
-                                />
-                            </div>
-                            <div class="form-group">
-                                <label>{ "Rôle" }</label>
-                                <select
-                                    ref={select_ref}
-                                    onchange={on_change_role}
-                                >
-                                    <option key="placeholder" value="-1">{ "Sélectionner le rôle" }</option>
-                                    { for (*roles).iter().map(|r| html! {
-                                        <option key={r.role_id} value={r.role_id.to_string()}>
-                                            { &r.role_name }
-                                        </option>
-                                    }) }
-                                </select>
-                            </div>
-                            <button class="btn-create" onclick={on_create_user}>
-                                { "Créer l'utilisateur avec un rôle" }
-                            </button>
                         </div>
-                    </div>
-                </div>
-            </div>
+                    }
+                }
+            }
         </>
     }
 }

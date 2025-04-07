@@ -6,6 +6,8 @@ use log::{error, info};
 use crate::utils::get_cookies;
 use serde_json::json;
 
+use gloo_timers::callback::Interval;
+
 /// Extraction du CSRF depuis les cookies
 fn extract_csrf(cookies: &str) -> String {
     cookies
@@ -72,30 +74,67 @@ struct DefaultPoliciesData {
 
 #[function_component(ManageRoles)]
 pub fn manage_roles() -> Html {
-    // 1. État d'authentification
+    // 1. État d'authentification (initialisé à Loading)
     let auth_status = use_state(|| AuthStatus::Loading);
+
+    // --- Vérification initiale de l'authentification ---
     {
-        let auth_status_handle = auth_status.clone();
-        spawn_local(async move {
-            let cookies = get_cookies().unwrap_or_default();
-            let csrf_token = extract_csrf(&cookies);
-
-            let resp = Request::get("http://127.0.0.1:8081/check_auth")
-                .header("X-CSRF-Token", &csrf_token)
-                .credentials(RequestCredentials::Include)
-                .send()
-                .await;
-
-            if let Ok(r) = resp {
-                if r.status() == 200 {
-                    auth_status_handle.set(AuthStatus::Valid);
-                } else {
-                    auth_status_handle.set(AuthStatus::Invalid);
-                }
-            } else {
-                auth_status_handle.set(AuthStatus::Invalid);
-            }
-        });
+        let auth_status_clone = auth_status.clone();
+        use_effect_with_deps(
+            move |_| {
+                spawn_local(async move {
+                    let cookies = get_cookies().unwrap_or_default();
+                    let csrf_token = extract_csrf(&cookies);
+                    let resp = Request::get("http://127.0.0.1:8081/check_auth")
+                        .header("X-CSRF-Token", &csrf_token)
+                        .credentials(RequestCredentials::Include)
+                        .send()
+                        .await;
+                    if let Ok(r) = resp {
+                        if r.status() == 200 {
+                            auth_status_clone.set(AuthStatus::Valid);
+                        } else {
+                            auth_status_clone.set(AuthStatus::Invalid);
+                        }
+                    } else {
+                        auth_status_clone.set(AuthStatus::Invalid);
+                    }
+                });
+                || ()
+            },
+            (),
+        );
+    }
+    // --- Vérification périodique toutes les 10 secondes ---
+    {
+        let auth_status_clone = auth_status.clone();
+        use_effect_with_deps(
+            move |_| {
+                let interval = Interval::new(10_000, move || {
+                    let auth_status_inner = auth_status_clone.clone();
+                    spawn_local(async move {
+                        let cookies = get_cookies().unwrap_or_default();
+                        let csrf_token = extract_csrf(&cookies);
+                        let resp = Request::get("http://127.0.0.1:8081/check_auth")
+                            .header("X-CSRF-Token", &csrf_token)
+                            .credentials(RequestCredentials::Include)
+                            .send()
+                            .await;
+                        if let Ok(r) = resp {
+                            if r.status() == 200 {
+                                auth_status_inner.set(AuthStatus::Valid);
+                            } else {
+                                auth_status_inner.set(AuthStatus::Invalid);
+                            }
+                        } else {
+                            auth_status_inner.set(AuthStatus::Invalid);
+                        }
+                    });
+                });
+                || drop(interval)
+            },
+            (),
+        );
     }
 
     // 2. États principaux
@@ -118,13 +157,11 @@ pub fn manage_roles() -> Html {
                     spawn_local(async move {
                         let cookies = get_cookies().unwrap_or_default();
                         let csrf_token = extract_csrf(&cookies);
-
                         let resp = Request::get("http://127.0.0.1:8081/roles")
                             .header("X-CSRF-Token", &csrf_token)
                             .credentials(RequestCredentials::Include)
                             .send()
                             .await;
-
                         if let Ok(r) = resp {
                             if r.status() == 200 {
                                 if let Ok(role_list) = r.json::<Vec<Role>>().await {
@@ -154,14 +191,12 @@ pub fn manage_roles() -> Html {
                     spawn_local(async move {
                         let cookies = get_cookies().unwrap_or_default();
                         let csrf_token = extract_csrf(&cookies);
-
                         let url = format!("http://127.0.0.1:8081/role_permissions/{}", role_id);
                         let resp = Request::get(&url)
                             .header("X-CSRF-Token", &csrf_token)
                             .credentials(RequestCredentials::Include)
                             .send()
                             .await;
-
                         if let Ok(r) = resp {
                             if r.status() == 200 {
                                 if let Ok(perms) = r.json::<Vec<Permission>>().await {
@@ -245,7 +280,6 @@ pub fn manage_roles() -> Html {
         let roles_state = roles.clone();
         Callback::from(move |_| {
             if let Some(role) = &*selected_role_state {
-                // Confirmation avant suppression
                 if let Some(window) = web_sys::window() {
                     if !window.confirm_with_message("Êtes-vous sûr de vouloir supprimer ce rôle ?").unwrap_or(false) {
                         return;
@@ -254,22 +288,18 @@ pub fn manage_roles() -> Html {
                 let role_id = role.role_id;
                 let roles_inner = roles_state.clone();
                 let selected_role_inner = selected_role_state.clone();
-
                 spawn_local(async move {
                     let cookies = get_cookies().unwrap_or_default();
                     let csrf_token = extract_csrf(&cookies);
                     let url = format!("http://127.0.0.1:8081/roles/{}", role_id);
-
                     let resp = Request::delete(&url)
                         .header("X-CSRF-Token", &csrf_token)
                         .credentials(RequestCredentials::Include)
                         .send()
                         .await;
-
                     if let Ok(r) = resp {
                         if r.status() == 200 {
                             info!("Rôle supprimé");
-                            // Recharger la liste des rôles
                             let cookies = get_cookies().unwrap_or_default();
                             let csrf_token = extract_csrf(&cookies);
                             let resp = Request::get("http://127.0.0.1:8081/roles")
@@ -284,7 +314,6 @@ pub fn manage_roles() -> Html {
                                     }
                                 }
                             }
-                            // Annuler la sélection
                             selected_role_inner.set(None);
                         } else {
                             error!("Erreur suppression du rôle: status {}", r.status());
@@ -308,12 +337,9 @@ pub fn manage_roles() -> Html {
                 spawn_local(async move {
                     let cookies = get_cookies().unwrap_or_default();
                     let csrf_token = extract_csrf(&cookies);
-
                     let current: &Vec<Permission> = permissions_state_clone.as_ref();
                     let is_assigned = current.iter().any(|p| p.permission_id == perm.permission_id);
-
                     if is_assigned {
-                        // Retirer
                         let url = format!("http://127.0.0.1:8081/role_permissions/{}/{}", role_id, perm.permission_id);
                         let resp = Request::delete(&url)
                             .header("X-CSRF-Token", &csrf_token)
@@ -328,7 +354,6 @@ pub fn manage_roles() -> Html {
                             }
                         }
                     } else {
-                        // Ajouter
                         let body = json!({
                             "role_id": role_id,
                             "permission_id": perm.permission_id,
@@ -341,7 +366,6 @@ pub fn manage_roles() -> Html {
                             .expect("Erreur body toggler permission")
                             .send()
                             .await;
-
                         if let Ok(r) = resp {
                             if r.status() == 200 {
                                 info!("Permission ajoutée");
@@ -350,7 +374,6 @@ pub fn manage_roles() -> Html {
                             }
                         }
                     }
-
                     // Recharger les permissions
                     let cookies2 = get_cookies().unwrap_or_default();
                     let csrf_token2 = extract_csrf(&cookies2);
@@ -380,12 +403,10 @@ pub fn manage_roles() -> Html {
             if let Some(role) = &*selected_role_state {
                 let role_id = role.role_id;
                 let payload = (*dp_data_clone).clone();
-
                 spawn_local(async move {
                     let cookies = get_cookies().unwrap_or_default();
                     let csrf_token = extract_csrf(&cookies);
                     let url = format!("http://127.0.0.1:8081/default_policies/{}", role_id);
-
                     let resp = Request::put(&url)
                         .header("Content-Type", "application/json")
                         .header("X-CSRF-Token", &csrf_token)
@@ -394,7 +415,6 @@ pub fn manage_roles() -> Html {
                         .expect("Erreur de body PUT")
                         .send()
                         .await;
-
                     if let Ok(r) = resp {
                         if r.status() == 200 {
                             info!("Default policies mises à jour");
@@ -415,17 +435,14 @@ pub fn manage_roles() -> Html {
         let roles_state = roles.clone();
         Callback::from(move |_| {
             let payload = (*create_role_with_dp_clone).clone();
-
             if payload.role_name.trim().is_empty() {
                 info!("Nom de rôle vide => on fait rien");
                 return;
             }
-
             let roles_inner = roles_state.clone();
             spawn_local(async move {
                 let cookies = get_cookies().unwrap_or_default();
                 let csrf_token = extract_csrf(&cookies);
-
                 let resp = Request::post("http://127.0.0.1:8081/roles_with_default_policies")
                     .header("Content-Type", "application/json")
                     .header("X-CSRF-Token", &csrf_token)
@@ -434,11 +451,9 @@ pub fn manage_roles() -> Html {
                     .expect("Erreur de body POST role+DP")
                     .send()
                     .await;
-
                 if let Ok(r) = resp {
                     if r.status() == 200 {
                         info!("Rôle + default policies créés");
-                        // Recharger la liste des rôles
                         let cookies2 = get_cookies().unwrap_or_default();
                         let csrf_token2 = extract_csrf(&cookies2);
                         let resp2 = Request::get("http://127.0.0.1:8081/roles")
@@ -463,333 +478,332 @@ pub fn manage_roles() -> Html {
         })
     };
 
-    // 13. Rendu
+    // 13. Rendu final
     html! {
         <div class="container">
-        {
-            match *auth_status {
-                AuthStatus::Loading => html! { <p>{ "Chargement..." }</p> },
-                AuthStatus::Invalid => html! { <p style="font-weight: bold;">{ "403 : Accès refusé" }</p> },
-                AuthStatus::Valid => html! {
-                    <div class="columns">
-                        // ================= COLONNE 1 : LISTE DES RÔLES =================
-                        <div class="column" style="border:1px solid #ccc; padding:1rem;">
-                            <h3>{ "Liste des rôles" }</h3>
-                            <ul>
+            {
+                match *auth_status {
+                    AuthStatus::Loading => html! { <p>{ "Chargement..." }</p> },
+                    AuthStatus::Invalid => html! { <p style="font-weight: bold;">{ "403 : Accès refusé" }</p> },
+                    AuthStatus::Valid => html! {
+                        <div class="columns">
+                            // ================= COLONNE 1 : LISTE DES RÔLES =================
+                            <div class="column" style="border:1px solid #ccc; padding:1rem;">
+                                <h3>{ "Liste des rôles" }</h3>
+                                <ul>
+                                    {
+                                        for (*roles).iter().cloned().map(|role| {
+                                            let callback = on_select_role_cloned.clone();
+                                            let role_clone = role.clone();
+                                            html! {
+                                                <li
+                                                    onclick={Callback::from({
+                                                        let role_for_emit = role_clone.clone();
+                                                        move |_| {
+                                                            callback.emit(role_for_emit.clone());
+                                                        }
+                                                    })}
+                                                    class={if let Some(selected) = &*selected_role {
+                                                        if selected.role_id == role_clone.role_id { "selected-role" } else { "" }
+                                                    } else { "" }}
+                                                    style="cursor: pointer; margin-bottom:0.3rem;"
+                                                >
+                                                    { role_clone.role_name.clone() }
+                                                </li>
+                                            }
+                                        })
+                                    }
+                                </ul>
+                            </div>
+
+                            // ================= COLONNE 2 : DÉTAILS DU RÔLE =================
+                            <div class="column" style="border:1px solid #ccc; padding:1rem; margin-left:1rem;">
                                 {
-                                    for (*roles).iter().cloned().map(|role| {
-                                        let callback = on_select_role_cloned.clone();
-                                        let role_clone = role.clone();
+                                    if let Some(role) = &*selected_role {
                                         html! {
-                                            <li
-                                                onclick={Callback::from({
-                                                    let role_for_emit = role_clone.clone();
-                                                    move |_| {
-                                                        callback.emit(role_for_emit.clone());
+                                            <div>
+                                                <h3>{ format!("Détails du rôle : {}", role.role_name) }</h3>
+                                                <button onclick={on_delete_role.clone()} class="btn-danger role-delete-btn" style="margin-bottom:1rem;">
+                                                    { "Supprimer le rôle" }
+                                                </button>
+                                                <h4>{ "Permissions (cliquez pour ajouter/retirer)" }</h4>
+                                                <ul>
+                                                    {
+                                                        for all_permissions().into_iter().map(|p| {
+                                                            let assigned = (*permissions).iter().any(|perm| perm.permission_id == p.permission_id);
+                                                            let toggle_cb = on_toggle_permission.clone();
+                                                            html! {
+                                                                <li
+                                                                    onclick={Callback::from({
+                                                                        let p_clone = p.clone();
+                                                                        move |_| {
+                                                                            toggle_cb.emit(p_clone.clone());
+                                                                        }
+                                                                    })}
+                                                                    class={if assigned { "assigned-permission" } else { "unassigned-permission" }}
+                                                                    style="cursor: pointer; margin-bottom:0.2rem;"
+                                                                >
+                                                                    { p.permission_name.clone() }
+                                                                </li>
+                                                            }
+                                                        })
                                                     }
-                                                })}
-                                                class={if let Some(selected) = &*selected_role {
-                                                    if selected.role_id == role_clone.role_id { "selected-role" } else { "" }
-                                                } else { "" }}
-                                                style="cursor: pointer; margin-bottom:0.3rem;"
-                                            >
-                                                { role_clone.role_name.clone() }
-                                            </li>
-                                        }
-                                    })
-                                }
-                            </ul>
-                        </div>
-
-                        // ================= COLONNE 2 : DÉTAILS DU RÔLE =================
-                        <div class="column" style="border:1px solid #ccc; padding:1rem; margin-left:1rem;">
-                            {
-                                if let Some(role) = &*selected_role {
-                                    html! {
-                                        <div>
-                                            <h3>{ format!("Détails du rôle : {}", role.role_name) }</h3>
-                                            <button onclick={on_delete_role.clone()} class="btn-danger role-delete-btn" style="margin-bottom:1rem;">
-                                                { "Supprimer le rôle" }
-                                            </button>
-
-                                            <h4>{ "Permissions (cliquez pour ajouter/retirer)" }</h4>
-                                            <ul>
-                                                { for all_permissions().into_iter().map(|p| {
-                                                    let assigned = (*permissions).iter().any(|perm| perm.permission_id == p.permission_id);
-                                                    let toggle_cb = on_toggle_permission.clone();
-                                                    html! {
-                                                        <li
-                                                            onclick={Callback::from({
-                                                                let p_clone = p.clone();
-                                                                move |_| {
-                                                                    toggle_cb.emit(p_clone.clone());
+                                                </ul>
+                                                <h4 style="margin-top:1.5rem; font-weight:bold;">{ "Default Policies" }</h4>
+                                                <div class="box" style="margin-top:1rem;">
+                                                    <div class="form-group">
+                                                        <label>{ "default_ro" }</label>
+                                                        <input
+                                                            type="text"
+                                                            value={dp_data.default_ro.clone()}
+                                                            oninput={Callback::from({
+                                                                let dp_state = dp_data.clone();
+                                                                move |e: InputEvent| {
+                                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                                        let mut dp = (*dp_state).clone();
+                                                                        dp.default_ro = input.value();
+                                                                        dp_state.set(dp);
+                                                                    }
                                                                 }
                                                             })}
-                                                            class={if assigned { "assigned-permission" } else { "unassigned-permission" }}
-                                                            style="cursor: pointer; margin-bottom:0.2rem;"
-                                                        >
-                                                            { p.permission_name.clone() }
-                                                        </li>
-                                                    }
-                                                }) }
-                                            </ul>
-
-                                            // Default Policies avec le style des inputs de la colonne de droite
-                                            <h4 style="margin-top:1.5rem; font-weight:bold;">{ "Default Policies" }</h4>
-                                            <div class="box" style="margin-top:1rem;">
-                                                <div class="form-group">
-                                                    <label>{ "default_ro" }</label>
-                                                    <input
-                                                        type="text"
-                                                        value={dp_data.default_ro.clone()}
-                                                        oninput={Callback::from({
-                                                            let dp_state = dp_data.clone();
-                                                            move |e: InputEvent| {
-                                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                                    let mut dp = (*dp_state).clone();
-                                                                    dp.default_ro = input.value();
-                                                                    dp_state.set(dp);
+                                                        />
+                                                    </div>
+                                                    <div class="form-group" style="margin-top:0.5rem;">
+                                                        <label>{ "default_rw" }</label>
+                                                        <input
+                                                            type="text"
+                                                            value={dp_data.default_rw.clone()}
+                                                            oninput={Callback::from({
+                                                                let dp_state = dp_data.clone();
+                                                                move |e: InputEvent| {
+                                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                                        let mut dp = (*dp_state).clone();
+                                                                        dp.default_rw = input.value();
+                                                                        dp_state.set(dp);
+                                                                    }
                                                                 }
-                                                            }
-                                                        })}
-                                                    />
-                                                </div>
-                                                <div class="form-group" style="margin-top:0.5rem;">
-                                                    <label>{ "default_rw" }</label>
-                                                    <input
-                                                        type="text"
-                                                        value={dp_data.default_rw.clone()}
-                                                        oninput={Callback::from({
-                                                            let dp_state = dp_data.clone();
-                                                            move |e: InputEvent| {
-                                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                                    let mut dp = (*dp_state).clone();
-                                                                    dp.default_rw = input.value();
-                                                                    dp_state.set(dp);
+                                                            })}
+                                                        />
+                                                    </div>
+                                                    <div class="form-group" style="margin-top:0.5rem;">
+                                                        <label>{ "tcp_bind" }</label>
+                                                        <input
+                                                            type="text"
+                                                            value={dp_data.tcp_bind.clone()}
+                                                            oninput={Callback::from({
+                                                                let dp_state = dp_data.clone();
+                                                                move |e: InputEvent| {
+                                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                                        let mut dp = (*dp_state).clone();
+                                                                        dp.tcp_bind = input.value();
+                                                                        dp_state.set(dp);
+                                                                    }
                                                                 }
-                                                            }
-                                                        })}
-                                                    />
-                                                </div>
-                                                <div class="form-group" style="margin-top:0.5rem;">
-                                                    <label>{ "tcp_bind" }</label>
-                                                    <input
-                                                        type="text"
-                                                        value={dp_data.tcp_bind.clone()}
-                                                        oninput={Callback::from({
-                                                            let dp_state = dp_data.clone();
-                                                            move |e: InputEvent| {
-                                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                                    let mut dp = (*dp_state).clone();
-                                                                    dp.tcp_bind = input.value();
-                                                                    dp_state.set(dp);
+                                                            })}
+                                                        />
+                                                    </div>
+                                                    <div class="form-group" style="margin-top:0.5rem;">
+                                                        <label>{ "tcp_connect" }</label>
+                                                        <input
+                                                            type="text"
+                                                            value={dp_data.tcp_connect.clone()}
+                                                            oninput={Callback::from({
+                                                                let dp_state = dp_data.clone();
+                                                                move |e: InputEvent| {
+                                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                                        let mut dp = (*dp_state).clone();
+                                                                        dp.tcp_connect = input.value();
+                                                                        dp_state.set(dp);
+                                                                    }
                                                                 }
-                                                            }
-                                                        })}
-                                                    />
-                                                </div>
-                                                <div class="form-group" style="margin-top:0.5rem;">
-                                                    <label>{ "tcp_connect" }</label>
-                                                    <input
-                                                        type="text"
-                                                        value={dp_data.tcp_connect.clone()}
-                                                        oninput={Callback::from({
-                                                            let dp_state = dp_data.clone();
-                                                            move |e: InputEvent| {
-                                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                                    let mut dp = (*dp_state).clone();
-                                                                    dp.tcp_connect = input.value();
-                                                                    dp_state.set(dp);
+                                                            })}
+                                                        />
+                                                    </div>
+                                                    <div class="form-group" style="margin-top:0.5rem;">
+                                                        <label>{ "allowed_ips" }</label>
+                                                        <input
+                                                            type="text"
+                                                            value={dp_data.allowed_ips.clone()}
+                                                            oninput={Callback::from({
+                                                                let dp_state = dp_data.clone();
+                                                                move |e: InputEvent| {
+                                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                                        let mut dp = (*dp_state).clone();
+                                                                        dp.allowed_ips = input.value();
+                                                                        dp_state.set(dp);
+                                                                    }
                                                                 }
-                                                            }
-                                                        })}
-                                                    />
-                                                </div>
-                                                <div class="form-group" style="margin-top:0.5rem;">
-                                                    <label>{ "allowed_ips" }</label>
-                                                    <input
-                                                        type="text"
-                                                        value={dp_data.allowed_ips.clone()}
-                                                        oninput={Callback::from({
-                                                            let dp_state = dp_data.clone();
-                                                            move |e: InputEvent| {
-                                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                                    let mut dp = (*dp_state).clone();
-                                                                    dp.allowed_ips = input.value();
-                                                                    dp_state.set(dp);
+                                                            })}
+                                                        />
+                                                    </div>
+                                                    <div class="form-group" style="margin-top:0.5rem;">
+                                                        <label>{ "allowed_domains" }</label>
+                                                        <input
+                                                            type="text"
+                                                            value={dp_data.allowed_domains.clone()}
+                                                            oninput={Callback::from({
+                                                                let dp_state = dp_data.clone();
+                                                                move |e: InputEvent| {
+                                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                                        let mut dp = (*dp_state).clone();
+                                                                        dp.allowed_domains = input.value();
+                                                                        dp_state.set(dp);
+                                                                    }
                                                                 }
-                                                            }
-                                                        })}
-                                                    />
+                                                            })}
+                                                        />
+                                                    </div>
                                                 </div>
-                                                <div class="form-group" style="margin-top:0.5rem;">
-                                                    <label>{ "allowed_domains" }</label>
-                                                    <input
-                                                        type="text"
-                                                        value={dp_data.allowed_domains.clone()}
-                                                        oninput={Callback::from({
-                                                            let dp_state = dp_data.clone();
-                                                            move |e: InputEvent| {
-                                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                                    let mut dp = (*dp_state).clone();
-                                                                    dp.allowed_domains = input.value();
-                                                                    dp_state.set(dp);
-                                                                }
-                                                            }
-                                                        })}
-                                                    />
-                                                </div>
+                                                <button onclick={on_update_dp} style="margin-top:0.8rem;">
+                                                    { "Mettre à jour" }
+                                                </button>
                                             </div>
-                                            <button onclick={on_update_dp} style="margin-top:0.8rem;">
-                                                { "Mettre à jour" }
-                                            </button>
-                                        </div>
+                                        }
+                                    } else {
+                                        html! { <p>{ "Sélectionnez un rôle pour voir les détails." }</p> }
                                     }
-                                } else {
-                                    html! { <p>{ "Sélectionnez un rôle pour voir les détails." }</p> }
                                 }
-                            }
-                        </div>
+                            </div>
 
-                        // ================= COLONNE 3 : CRÉER RÔLE + DEFAULT POLICIES =================
-                        <div class="column" style="border:1px solid #ccc; padding:1rem; margin-left:1rem;">
-                            <h3>{ "Créer un nouveau rôle + default policies" }</h3>
-                            <div class="box" style="margin-top:1rem;">
-                                <div class="form-group">
-                                    <label>{ "Nom du rôle" }</label>
-                                    <input
-                                        type="text"
-                                        placeholder="Nom du rôle"
-                                        value={create_role_with_dp.role_name.clone()}
-                                        oninput={Callback::from({
-                                            let st = create_role_with_dp.clone();
-                                            move |e: InputEvent| {
-                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                    let mut data = (*st).clone();
-                                                    data.role_name = input.value();
-                                                    st.set(data);
+                            // ================= COLONNE 3 : CRÉER RÔLE + DEFAULT POLICIES =================
+                            <div class="column" style="border:1px solid #ccc; padding:1rem; margin-left:1rem;">
+                                <h3>{ "Créer un nouveau rôle + default policies" }</h3>
+                                <div class="box" style="margin-top:1rem;">
+                                    <div class="form-group">
+                                        <label>{ "Nom du rôle" }</label>
+                                        <input
+                                            type="text"
+                                            placeholder="Nom du rôle"
+                                            value={create_role_with_dp.role_name.clone()}
+                                            oninput={Callback::from({
+                                                let st = create_role_with_dp.clone();
+                                                move |e: InputEvent| {
+                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                        let mut data = (*st).clone();
+                                                        data.role_name = input.value();
+                                                        st.set(data);
+                                                    }
                                                 }
-                                            }
-                                        })}
-                                    />
-                                </div>
-                                <div class="form-group" style="margin-top:0.5rem;">
-                                    <label>{ "default_ro" }</label>
-                                    <input
-                                        type="text"
-                                        placeholder="/var/lib:/usr/bin..."
-                                        value={create_role_with_dp.default_ro.clone()}
-                                        oninput={Callback::from({
-                                            let st = create_role_with_dp.clone();
-                                            move |e: InputEvent| {
-                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                    let mut data = (*st).clone();
-                                                    data.default_ro = input.value();
-                                                    st.set(data);
+                                            })}
+                                        />
+                                    </div>
+                                    <div class="form-group" style="margin-top:0.5rem;">
+                                        <label>{ "default_ro" }</label>
+                                        <input
+                                            type="text"
+                                            placeholder="/var/lib:/usr/bin..."
+                                            value={create_role_with_dp.default_ro.clone()}
+                                            oninput={Callback::from({
+                                                let st = create_role_with_dp.clone();
+                                                move |e: InputEvent| {
+                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                        let mut data = (*st).clone();
+                                                        data.default_ro = input.value();
+                                                        st.set(data);
+                                                    }
                                                 }
-                                            }
-                                        })}
-                                    />
-                                </div>
-                                <div class="form-group" style="margin-top:0.5rem;">
-                                    <label>{ "default_rw" }</label>
-                                    <input
-                                        type="text"
-                                        placeholder="/var/lib:/usr/bin..."
-                                        value={create_role_with_dp.default_rw.clone()}
-                                        oninput={Callback::from({
-                                            let st = create_role_with_dp.clone();
-                                            move |e: InputEvent| {
-                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                    let mut data = (*st).clone();
-                                                    data.default_rw = input.value();
-                                                    st.set(data);
+                                            })}
+                                        />
+                                    </div>
+                                    <div class="form-group" style="margin-top:0.5rem;">
+                                        <label>{ "default_rw" }</label>
+                                        <input
+                                            type="text"
+                                            placeholder="/var/lib:/usr/bin..."
+                                            value={create_role_with_dp.default_rw.clone()}
+                                            oninput={Callback::from({
+                                                let st = create_role_with_dp.clone();
+                                                move |e: InputEvent| {
+                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                        let mut data = (*st).clone();
+                                                        data.default_rw = input.value();
+                                                        st.set(data);
+                                                    }
                                                 }
-                                            }
-                                        })}
-                                    />
-                                </div>
-                                <div class="form-group" style="margin-top:0.5rem;">
-                                    <label>{ "tcp_bind" }</label>
-                                    <input
-                                        type="text"
-                                        placeholder="9418"
-                                        value={create_role_with_dp.tcp_bind.clone()}
-                                        oninput={Callback::from({
-                                            let st = create_role_with_dp.clone();
-                                            move |e: InputEvent| {
-                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                    let mut data = (*st).clone();
-                                                    data.tcp_bind = input.value();
-                                                    st.set(data);
+                                            })}
+                                        />
+                                    </div>
+                                    <div class="form-group" style="margin-top:0.5rem;">
+                                        <label>{ "tcp_bind" }</label>
+                                        <input
+                                            type="text"
+                                            placeholder="9418"
+                                            value={create_role_with_dp.tcp_bind.clone()}
+                                            oninput={Callback::from({
+                                                let st = create_role_with_dp.clone();
+                                                move |e: InputEvent| {
+                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                        let mut data = (*st).clone();
+                                                        data.tcp_bind = input.value();
+                                                        st.set(data);
+                                                    }
                                                 }
-                                            }
-                                        })}
-                                    />
-                                </div>
-                                <div class="form-group" style="margin-top:0.5rem;">
-                                    <label>{ "tcp_connect" }</label>
-                                    <input
-                                        type="text"
-                                        placeholder="80:443"
-                                        value={create_role_with_dp.tcp_connect.clone()}
-                                        oninput={Callback::from({
-                                            let st = create_role_with_dp.clone();
-                                            move |e: InputEvent| {
-                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                    let mut data = (*st).clone();
-                                                    data.tcp_connect = input.value();
-                                                    st.set(data);
+                                            })}
+                                        />
+                                    </div>
+                                    <div class="form-group" style="margin-top:0.5rem;">
+                                        <label>{ "tcp_connect" }</label>
+                                        <input
+                                            type="text"
+                                            placeholder="80:443"
+                                            value={create_role_with_dp.tcp_connect.clone()}
+                                            oninput={Callback::from({
+                                                let st = create_role_with_dp.clone();
+                                                move |e: InputEvent| {
+                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                        let mut data = (*st).clone();
+                                                        data.tcp_connect = input.value();
+                                                        st.set(data);
+                                                    }
                                                 }
-                                            }
-                                        })}
-                                    />
-                                </div>
-                                <div class="form-group" style="margin-top:0.5rem;">
-                                    <label>{ "allowed_ips" }</label>
-                                    <input
-                                        type="text"
-                                        placeholder="192.168.1.1,192.168.1.2"
-                                        value={create_role_with_dp.allowed_ips.clone()}
-                                        oninput={Callback::from({
-                                            let st = create_role_with_dp.clone();
-                                            move |e: InputEvent| {
-                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                    let mut data = (*st).clone();
-                                                    data.allowed_ips = input.value();
-                                                    st.set(data);
+                                            })}
+                                        />
+                                    </div>
+                                    <div class="form-group" style="margin-top:0.5rem;">
+                                        <label>{ "allowed_ips" }</label>
+                                        <input
+                                            type="text"
+                                            placeholder="192.168.1.1,192.168.1.2"
+                                            value={create_role_with_dp.allowed_ips.clone()}
+                                            oninput={Callback::from({
+                                                let st = create_role_with_dp.clone();
+                                                move |e: InputEvent| {
+                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                        let mut data = (*st).clone();
+                                                        data.allowed_ips = input.value();
+                                                        st.set(data);
+                                                    }
                                                 }
-                                            }
-                                        })}
-                                    />
-                                </div>
-                                <div class="form-group" style="margin-top:0.5rem;">
-                                    <label>{ "allowed_domains" }</label>
-                                    <input
-                                        type="text"
-                                        placeholder="example.com,example.org"
-                                        value={create_role_with_dp.allowed_domains.clone()}
-                                        oninput={Callback::from({
-                                            let st = create_role_with_dp.clone();
-                                            move |e: InputEvent| {
-                                                if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
-                                                    let mut data = (*st).clone();
-                                                    data.allowed_domains = input.value();
-                                                    st.set(data);
+                                            })}
+                                        />
+                                    </div>
+                                    <div class="form-group" style="margin-top:0.5rem;">
+                                        <label>{ "allowed_domains" }</label>
+                                        <input
+                                            type="text"
+                                            placeholder="example.com,example.org"
+                                            value={create_role_with_dp.allowed_domains.clone()}
+                                            oninput={Callback::from({
+                                                let st = create_role_with_dp.clone();
+                                                move |e: InputEvent| {
+                                                    if let Some(input) = e.target_dyn_into::<web_sys::HtmlInputElement>() {
+                                                        let mut data = (*st).clone();
+                                                        data.allowed_domains = input.value();
+                                                        st.set(data);
+                                                    }
                                                 }
-                                            }
-                                        })}
-                                    />
+                                            })}
+                                        />
+                                    </div>
+                                    <button onclick={on_create_role_with_dp} style="margin-top:1rem;">
+                                        { "Créer Rôle + Default Policies" }
+                                    </button>
                                 </div>
-                                <button onclick={on_create_role_with_dp} style="margin-top:1rem;">
-                                    { "Créer Rôle + Default Policies" }
-                                </button>
                             </div>
                         </div>
-                    </div>
+                    }
                 }
             }
-        }
         </div>
     }
 }

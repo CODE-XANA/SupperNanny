@@ -17,5 +17,5 @@ js-sys = "0.3.77"
 web-sys = { version = "0.3.77", features = ["Window", "Document", "HtmlInputElement", "HtmlSelectElement", "console", "HtmlDocument"] }
 futures = "0.3.31"
 cookie = "0.16"
-
+gloo-dialogs = "0.2.0"
 yew-router = "0.17"
