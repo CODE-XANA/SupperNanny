@@ -4,6 +4,7 @@ mod roles;
 mod ruleset;
 mod models;
 mod events;
+mod utils;
 
 use axum::{
     extract::Extension,

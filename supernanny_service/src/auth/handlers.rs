@@ -1,13 +1,22 @@
-use axum::{extract::{Extension, Json}, http::StatusCode};
+use axum::{
+    extract::{Extension, Json},
+    http::StatusCode,
+};
 use bcrypt::verify;
 use jsonwebtoken::{encode, EncodingKey, Header};
-use std::{env, time::{SystemTime, UNIX_EPOCH, Duration}};
+use std::{
+    env,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::task::spawn_blocking;
 
 use crate::{
+    auth::jwt::{AuthUser, Claims},
+    models::dto::{AuthResponse, LoginRequest},
+    models::security_log::SecurityLogEntry,
     state::AppState,
-    auth::jwt::{Claims, AuthUser},
-    models::dto::{LoginRequest, AuthResponse},
+    utils::logger::log_security_event,
 };
 
 #[axum::debug_handler]
@@ -16,14 +25,18 @@ pub async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
     let username = payload.username.clone();
+    let username_clone = username.clone(); // 👈 save a clone for logging
     let password = payload.password.clone();
-    let state = state.clone();
+    let state_clone = state.clone();
 
     let token_result = spawn_blocking(move || {
-        let mut conn = state.db_pool.get()
+        let mut conn = state_clone
+            .db_pool
+            .get()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
 
-        let row = conn.query_opt("SELECT password_hash FROM users WHERE username = $1", &[&username])
+        let row = conn
+            .query_opt("SELECT password_hash FROM users WHERE username = $1", &[&username])
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Database query error: {e}")))?;
 
         let password_hash: String = match row {
@@ -33,6 +46,7 @@ pub async fn login(
 
         let valid = verify(&password, &password_hash)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("bcrypt error: {e}")))?;
+
         if !valid {
             return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".to_string()));
         }
@@ -43,18 +57,48 @@ pub async fn login(
             .as_secs();
         let exp = now + 3600;
 
-        let claims = Claims { sub: username, exp: exp as usize };
-        let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "my_very_secret_key".to_string());
+        let claims = Claims {
+            sub: username,
+            exp: exp as usize,
+        };
+
+        let secret =
+            env::var("JWT_SECRET").unwrap_or_else(|_| "my_very_secret_key".to_string());
 
         let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_ref()))
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Token generation error: {e}")))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Token generation error: {e}"),
+                )
+            })?;
 
         Ok(token)
     })
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Join error: {e}")))??;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Join error: {e}"),
+        )
+    })?;
 
-    Ok(Json(AuthResponse { token: token_result }))
+    // ✅ Log successful login
+    let _ = log_security_event(
+        Arc::new(state.clone()),
+        SecurityLogEntry {
+            username: Some(username_clone),
+            ip_address: None, // Future improvement: extract from request
+            action: "successful_login".into(),
+            detail: Some("User logged in".into()),
+            severity: "info".into(),
+        },
+    )
+    .await;
+
+    Ok(Json(AuthResponse {
+        token: token_result?,
+    }))
 }
 
 pub async fn who_am_i(AuthUser { claims }: AuthUser) -> String {
