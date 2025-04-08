@@ -7,6 +7,7 @@ mod events;
 
 
 use axum::{Router, routing::{get, post}, extract::Extension};
+
 use std::net::SocketAddr;
 use tracing::info;
 use dotenvy::dotenv;
