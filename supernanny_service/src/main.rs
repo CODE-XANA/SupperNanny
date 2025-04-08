@@ -5,18 +5,25 @@ mod ruleset;
 mod models;
 mod events;
 
-
-use axum::{Router, routing::{get, post}, extract::Extension};
-
-use std::net::SocketAddr;
+use axum::{
+    Router,
+    extract::Extension,
+    routing::{get, post},
+};
+use tower_governor::{
+    GovernorLayer,
+    governor::GovernorConfigBuilder,
+    key_extractor::SmartIpKeyExtractor,
+};
+use std::{net::SocketAddr, sync::Arc};
 use tracing::info;
 use dotenvy::dotenv;
 
 use auth::handlers::{login, who_am_i};
 use roles::get_roles;
 use ruleset::get_ruleset;
-use state::AppState;
 use crate::events::log_event;
+use state::AppState;
 
 #[tokio::main]
 async fn main() {
@@ -36,8 +43,23 @@ async fn main() {
         db_url.parse().unwrap(),
         postgres::NoTls,
     );
-    let pool = r2d2::Pool::builder().max_size(10).build(manager).expect("Failed to create pool");
+
+    let pool = r2d2::Pool::builder()
+        .max_size(10)
+        .build(manager)
+        .expect("Failed to create pool");
+
     let app_state = AppState { db_pool: pool };
+
+    // ✅ Governor config with Arc
+    let governor_cfg = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(5)
+            .burst_size(10)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .expect("Failed to build GovernorConfig"),
+    );
 
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
@@ -46,10 +68,17 @@ async fn main() {
         .route("/auth/roles", get(get_roles))
         .route("/auth/ruleset", get(get_ruleset))
         .route("/events/log", post(log_event))
+        .layer(GovernorLayer {
+            config: governor_cfg.clone(),
+        })
         .layer(Extension(app_state));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3005));
-    info!("Starting server on http://{}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    info!("🚀 Server running at http://{}", addr);
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("Failed to bind to address");
+
     axum::serve(listener, app).await.unwrap();
 }
