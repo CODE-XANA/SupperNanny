@@ -3,6 +3,8 @@ mod auth;
 mod roles;
 mod ruleset;
 mod models;
+mod events;
+
 
 use axum::{Router, routing::{get, post}, extract::Extension};
 use std::net::SocketAddr;
@@ -13,6 +15,7 @@ use auth::handlers::{login, who_am_i};
 use roles::get_roles;
 use ruleset::get_ruleset;
 use state::AppState;
+use crate::events::log_event;
 
 #[tokio::main]
 async fn main() {
@@ -41,6 +44,7 @@ async fn main() {
         .route("/whoami", get(who_am_i))
         .route("/auth/roles", get(get_roles))
         .route("/auth/ruleset", get(get_ruleset))
+        .route("/events/log", post(log_event))
         .layer(Extension(app_state));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3005));

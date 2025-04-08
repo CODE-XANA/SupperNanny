@@ -20,3 +20,5 @@ postgres = "0.19.10"
 headers = "0.4"
 async-trait = "0.1"
 axum-extra = { version = "0.10.1", features = ["typed-header"] }
+chrono = { version = "0.4.40", features = ["serde"] }
+validator = { version = "0.20", features = ["derive"] }
