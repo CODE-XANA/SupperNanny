@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Extension, Json},
+    extract::{Extension, Json, ConnectInfo},
     http::StatusCode,
 };
 use bcrypt::verify;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use std::{
     env,
+    net::SocketAddr,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -21,20 +22,24 @@ use crate::{
 
 #[axum::debug_handler]
 pub async fn login(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Extension(state): Extension<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
     let username = payload.username.clone();
-    let username_clone = username.clone(); // 👈 save a clone for logging
     let password = payload.password.clone();
+    let client_ip = Some(addr.ip().to_string());
+
     let state_clone = state.clone();
 
-    let token_result = spawn_blocking(move || {
+    // Spawn blocking verification logic
+    let result = spawn_blocking(move || {
         let mut conn = state_clone
             .db_pool
             .get()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
 
+        // Check if user exists
         let row = conn
             .query_opt("SELECT password_hash FROM users WHERE username = $1", &[&username])
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Database query error: {e}")))?;
@@ -44,6 +49,7 @@ pub async fn login(
             None => return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())),
         };
 
+        // Check password
         let valid = verify(&password, &password_hash)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("bcrypt error: {e}")))?;
 
@@ -51,6 +57,7 @@ pub async fn login(
             return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".to_string()));
         }
 
+        // Create token
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::new(0, 0))
@@ -58,7 +65,7 @@ pub async fn login(
         let exp = now + 3600;
 
         let claims = Claims {
-            sub: username,
+            sub: username.clone(),
             exp: exp as usize,
         };
 
@@ -73,7 +80,7 @@ pub async fn login(
                 )
             })?;
 
-        Ok(token)
+        Ok::<(String, String), (StatusCode, String)>((username, token))
     })
     .await
     .map_err(|e| {
@@ -83,22 +90,39 @@ pub async fn login(
         )
     })?;
 
-    // ✅ Log successful login
-    let _ = log_security_event(
-        Arc::new(state.clone()),
-        SecurityLogEntry {
-            username: Some(username_clone),
-            ip_address: None, // Future improvement: extract from request
-            action: "successful_login".into(),
-            detail: Some("User logged in".into()),
-            severity: "info".into(),
-        },
-    )
-    .await;
+    match result {
+        Ok((username, token)) => {
+            let _ = log_security_event(
+                Arc::new(state.clone()),
+                SecurityLogEntry {
+                    username: Some(username),
+                    ip_address: client_ip,
+                    action: "successful_login".into(),
+                    detail: Some("User logged in".into()),
+                    severity: "info".into(),
+                },
+            )
+            .await;
 
-    Ok(Json(AuthResponse {
-        token: token_result?,
-    }))
+            Ok(Json(AuthResponse { token }))
+        }
+
+        Err((status, message)) => {
+            let _ = log_security_event(
+                Arc::new(state.clone()),
+                SecurityLogEntry {
+                    username: Some(payload.username.clone()),
+                    ip_address: client_ip,
+                    action: "failed_login".into(),
+                    detail: Some(message.clone()),
+                    severity: "warning".into(),
+                },
+            )
+            .await;
+
+            Err((status, message))
+        }
+    }
 }
 
 pub async fn who_am_i(AuthUser { claims }: AuthUser) -> String {

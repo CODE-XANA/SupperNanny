@@ -44,8 +44,7 @@ impl KeyExtractor for SafeIpExtractor {
             .get::<SocketAddr>()
             .map(|sock| sock.ip())
             .unwrap_or_else(|| {
-                // Fallback to loopback IP in dev
-                tracing::warn!("Falling back to 127.0.0.1 for rate-limiting key");
+                tracing::debug!("Falling back to 127.0.0.1 for rate-limiting key");
                 IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
             }))
     }
@@ -98,10 +97,12 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3005));
     info!("🚀 Server running at http://{}", addr);
-
+        
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Failed to bind to address");
-
-    axum::serve(listener, app).await.unwrap();
+        
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .unwrap();
 }
