@@ -12,6 +12,8 @@ use std::env;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
+    pub user_id: i32,
+    pub role_id: i32,
     pub exp: usize,
 }
 

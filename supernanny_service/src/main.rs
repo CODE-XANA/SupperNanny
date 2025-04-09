@@ -26,10 +26,9 @@ use tower_governor::{
     GovernorError,
 };
 use tracing::info;
-
+use crate::ruleset::handlers::get_ruleset;
 use auth::handlers::{login, who_am_i};
 use roles::get_roles;
-use ruleset::get_ruleset;
 use crate::events::log_event;
 use crate::state::AppState;
 
@@ -89,6 +88,7 @@ async fn main() {
         .route("/whoami", get(who_am_i))
         .route("/auth/roles", get(get_roles))
         .route("/auth/ruleset", get(get_ruleset))
+        .route("/ruleset", axum::routing::get(get_ruleset))
         .route("/events/log", post(log_event))
         .layer(GovernorLayer {
             config: governor_cfg,
