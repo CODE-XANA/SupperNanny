@@ -111,6 +111,7 @@ mod fs;
 mod net;
 mod ruleset;
 mod uapi;
+pub mod policy_client;
 
 #[cfg(test)]
 mod tests {

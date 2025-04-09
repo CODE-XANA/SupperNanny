@@ -88,7 +88,6 @@ async fn main() {
         .route("/whoami", get(who_am_i))
         .route("/auth/roles", get(get_roles))
         .route("/auth/ruleset", get(get_ruleset))
-        .route("/ruleset", axum::routing::get(get_ruleset))
         .route("/events/log", post(log_event))
         .layer(GovernorLayer {
             config: governor_cfg,

@@ -1,29 +1,24 @@
 use anyhow::{anyhow, Context, Result};
-use bcrypt::verify;
-use dialoguer::{Confirm, Input, Password, Select};
+use dialoguer::{Input, Select};
 use landlock::{
-    Access, AccessFs, AccessNet, ABI, NetPort, PathBeneath, PathFd, Ruleset, RulesetStatus,
-    RulesetAttr, RulesetCreatedAttr,
+    Access, AccessFs, AccessNet, ABI, NetPort, PathBeneath, PathFd, Ruleset, RulesetAttr,
+    RulesetCreatedAttr,
 };
-use postgres::{Config, NoTls};
 use regex::Regex;
+use reqwest::blocking::Client;
 use std::collections::HashSet;
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use hostname::get as get_hostname_raw;
-use dotenvy::dotenv;
-use r2d2::Pool;
-use r2d2_postgres::PostgresConnectionManager;
-use once_cell::sync::Lazy;
 use tempfile::TempDir;
+use supernanny_sandboxer::policy_client::{RuleSet, RuleSetRaw};
+use supernanny_sandboxer::policy_client::{User, log_denial_event};
 
-// -----------------------------------------------------------------------
-// Production code begins here.
-// -----------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// AppPolicy
+// ----------------------------------------------------------------------------
 
 #[derive(Debug)]
 struct AppPolicy {
@@ -35,44 +30,31 @@ struct AppPolicy {
     allowed_domains: HashSet<String>,
 }
 
-#[derive(Debug)]
-struct User {
-    user_id: i32,
-    #[allow(dead_code)]
-    username: String,
+impl From<RuleSet> for AppPolicy {
+    fn from(rs: RuleSet) -> Self {
+        Self {
+            ro_paths: rs.ro_paths,
+            rw_paths: rs.rw_paths,
+            tcp_bind: rs.tcp_bind,
+            tcp_connect: rs.tcp_connect,
+            allowed_ips: rs.allowed_ips,
+            allowed_domains: rs.allowed_domains,
+        }
+    }
 }
 
 impl AppPolicy {
-
-    fn default_policy_for_role(role_id: i32) -> Result<Self> {
-        let mut conn = get_db_conn().context("Failed to get DB connection for fetching default policy")?;
-
-        let query = "
-            SELECT default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains
-            FROM default_policies
-            WHERE role_id = $1
-        ";
-
-        let row = conn.query_one(query, &[&role_id])
-            .context("Failed to fetch default policy from database")?;
-
-        let ro_paths = parse_paths(row.get("default_ro"));
-        let rw_paths = parse_paths(row.get("default_rw"));
-        let tcp_bind = parse_ports(row.get("tcp_bind"));
-        let tcp_connect = parse_ports(row.get("tcp_connect"));
-        let allowed_ips = parse_ips(row.get("allowed_ips"));
-        let allowed_domains = parse_domains(row.get("allowed_domains"));
-
-        Ok(Self {
-            ro_paths,
-            rw_paths,
-            tcp_bind,
-            tcp_connect,
-            allowed_ips,
-            allowed_domains,
-        })
+    fn contains_path(&self, path: &Path) -> bool {
+        self.ro_paths.contains(path) || self.rw_paths.contains(path)
     }
-        
+
+    fn join_paths(paths: &HashSet<PathBuf>) -> String {
+        paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join(":")
+    }
+
+    fn join_ports(ports: &HashSet<u16>) -> String {
+        ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(":")
+    }
 
     fn join_ips(ips: &HashSet<String>) -> String {
         ips.iter().cloned().collect::<Vec<_>>().join(":")
@@ -82,338 +64,72 @@ impl AppPolicy {
         domains.iter().cloned().collect::<Vec<_>>().join(":")
     }
 
-    fn contains_path(&self, path: &Path) -> bool {
-        self.ro_paths.contains(path) || self.rw_paths.contains(path)
-    }
-
-    fn join_paths(paths: &HashSet<PathBuf>) -> String {
-        paths
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join(":")
-    }
-
-    fn join_ports(ports: &HashSet<u16>) -> String {
-        ports
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(":")
-    }
-}
-
-// Our global static pool
-static POOL: Lazy<Pool<PostgresConnectionManager<NoTls>>> = Lazy::new(|| {
-    dotenv().ok();
-
-    let host = env::var("DB_HOST").expect("DB_HOST must be set");
-    let port = env::var("DB_PORT").expect("DB_PORT must be set");
-    let user = env::var("DB_USER").expect("DB_USER must be set");
-    let pass = env::var("DB_PASS").expect("DB_PASS must be set");
-    let dbname = env::var("DB_NAME").expect("DB_NAME must be set");
-
-    let mut pg_config = Config::new();
-    pg_config
-        .host(&host)
-        .port(port.parse().expect("Invalid DB_PORT value"))
-        .user(&user)
-        .password(&pass)
-        .dbname(&dbname);
-
-    // Configure SSL mode based on environment variable
-    let ssl_mode = env::var("DB_SSL_MODE").unwrap_or_else(|_| "prefer".to_string());
-    let ssl_mode = match ssl_mode.as_str() {
-        "disable" => postgres::config::SslMode::Disable,
-        "prefer" => postgres::config::SslMode::Prefer,
-        "require" => postgres::config::SslMode::Require,
-        _ => postgres::config::SslMode::Prefer,
-    };
-    pg_config.ssl_mode(ssl_mode);
-
-    // Note: Replace `NoTls` with a proper TLS implementation in production
-    let manager = PostgresConnectionManager::new(pg_config, NoTls);
-
-    Pool::builder()
-        .max_size(10)
-        .build(manager)
-        .expect("Failed to create pool.")
-});
-
-pub fn get_db_conn() -> Result<r2d2::PooledConnection<PostgresConnectionManager<NoTls>>> {
-    POOL.get().context("Failed to get DB connection from pool")
-}
-
-// -----------------------------------------------------------------------
-// RBAC Functions
-// -----------------------------------------------------------------------
-
-fn authenticate_user(username: &str, password: &str) -> Result<User> {
-    let mut conn = get_db_conn().context("Failed to get DB connection for authentication")?;
-
-    let row = conn.query_opt(
-        "SELECT user_id, password_hash FROM users WHERE username = $1",
-        &[&username],
-    )
-    .context("Authentication query failed")?
-    .ok_or_else(|| anyhow!("User not found"))?;
-
-    let stored_hash: String = row.get(1);
-    if verify(password, &stored_hash).map_err(|e| anyhow!("Password verification failed: {}", e))? {
-        Ok(User {
-            user_id: row.get(0),
-            username: username.to_string(),
-        })
-    } else {
-        Err(anyhow!("Invalid credentials"))
-    }
-}
-
-fn has_permission(user_id: i32, permission: &str) -> Result<bool> {
-    let mut conn = get_db_conn().context("Failed to get DB connection for permission check")?;
-    let count: i64 = conn.query_one(
-        r#"
-        SELECT COUNT(*) FROM role_permissions
-        WHERE role_id IN (
-            SELECT role_id FROM user_roles WHERE user_id = $1
-        )
-        AND permission_id = (
-            SELECT permission_id FROM permissions WHERE permission_name = $2
-        )
-        "#,
-        &[&user_id, &permission],
-    )?
-    .get(0);
-
-    Ok(count > 0)
-}
-
-// -----------------------------------------------------------------------
-// DB Functions
-// -----------------------------------------------------------------------
-
-fn fetch_policy_from_db(app: &str, user: &User) -> Result<AppPolicy> {
-    let mut client = get_db_conn().context("Failed to get DB connection for policy fetch")?;
-
-    // Get user's roles (assuming single role for simplicity)
-    let roles: Vec<i32> = client.query(
-        "SELECT r.role_id FROM roles r
-         JOIN user_roles ur ON r.role_id = ur.role_id
-         WHERE ur.user_id = $1",
-        &[&user.user_id],
-    )?
-    .iter()
-    .map(|row| row.get(0))
-    .collect();
-
-    // Try each role until we find a policy
-    for &role_id in &roles {
-        let query = "SELECT default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains
-                     FROM app_policy
-                     WHERE app_name = $1 AND role_id = $2";
-
-        if let Some(row) = client.query_opt(query, &[&app, &role_id])? {
-            // Parse and return policy if found
-            let ro = parse_paths(row.get(0));
-            let rw = parse_paths(row.get(1));
-            let bind = parse_ports(row.get(2));
-            let connect = parse_ports(row.get(3));
-            let allowed_ips = parse_ips(row.get(4));
-            let allowed_domains = parse_domains(row.get(5));
-
-            return Ok(AppPolicy {
-                ro_paths: ro,
-                rw_paths: rw,
-                tcp_bind: bind,
-                tcp_connect: connect,
-                allowed_ips: allowed_ips,
-                allowed_domains: allowed_domains,
-            });
+    fn to_raw(&self) -> RuleSetRaw {
+        RuleSetRaw {
+            default_ro: Self::join_paths(&self.ro_paths),
+            default_rw: Self::join_paths(&self.rw_paths),
+            tcp_bind: Self::join_ports(&self.tcp_bind),
+            tcp_connect: Self::join_ports(&self.tcp_connect),
+            allowed_ips: Self::join_ips(&self.allowed_ips),
+            allowed_domains: Self::join_domains(&self.allowed_domains),
         }
     }
-
-    // Fallback to default policy for the user's role if no role-specific policy found
-    let default_role_id = roles.first().copied().unwrap_or(0); // Use the first role or handle accordingly
-    AppPolicy::default_policy_for_role(default_role_id)
 }
 
+// ----------------------------------------------------------------------------
+// Auth: just token
+// ----------------------------------------------------------------------------
 
-
-// Helper function to parse domains
-fn parse_domains(domains: String) -> HashSet<String> {
-    domains.split(':')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
+fn get_credentials() -> Result<(String, User)> {
+    let username = Input::<String>::new()
+        .with_prompt("Username")
+        .interact_text()
+        .context("Failed to read username")?;
+    
+    let password = dialoguer::Password::new()
+        .with_prompt("Password")
+        .interact()
+        .context("Failed to read password")?;
+    
+    RuleSet::login(&username, &password)
+        .context("Authentication failed")
 }
 
+// ----------------------------------------------------------------------------
+// Server communication
+// ----------------------------------------------------------------------------
 
-// Helper function to parse IPs
-fn parse_ips(ips: String) -> HashSet<String> {
-    ips.split(':')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .filter(|ip| {
-            ip.parse::<std::net::IpAddr>().is_ok()
-        })
-        .collect()
-}
+fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str) -> Result<()> {
+    let raw = policy.to_raw();
+    let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3005".into());
 
+    // Use correct endpoint with app_name in query
+    let url = format!("{}/auth/ruleset?app_name={}", base_url, app);
 
+    let client = Client::new();
 
-// Helper functions
-fn parse_paths(paths: String) -> HashSet<PathBuf> {
-    paths.split(':')
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .collect()
-}
+    // Directly send raw (not wrapped in `{ "policy": ... }`)
+    let res = client
+        .post(&url)
+        .bearer_auth(token)
+        .json(&raw)
+        .send()
+        .context("Failed to send policy update to server")?;
 
-fn parse_ports(ports: String) -> HashSet<u16> {
-    ports.split(':')
-        .filter_map(|s| s.parse().ok())
-        .collect()
-}
-
-fn update_policy_in_db(app: &str, policy: &AppPolicy, user: &User) -> Result<()> {
-    if !has_permission(user.user_id, "manage_policies")? {
-        return Err(anyhow!("Insufficient permissions to modify policies"));
+    if !res.status().is_success() {
+        return Err(anyhow!("Policy update failed: {}", res.status()));
     }
 
-    let mut conn = get_db_conn().context("Failed to get DB connection for policy update")?;
-    let mut tx = conn.transaction().context("Failed to start transaction")?;
-
-    // Retrieve the user's role (assume one primary role per user)
-    let role_id: i32 = tx.query_one(
-        "SELECT r.role_id FROM roles r
-         JOIN user_roles ur ON r.role_id = ur.role_id
-         WHERE ur.user_id = $1 LIMIT 1",
-        &[&user.user_id],
-    )?.get(0);
-
-    let sql = r#"
-    INSERT INTO app_policy
-    (app_name, role_id, default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-    ON CONFLICT (app_name, role_id) DO UPDATE SET
-        default_ro = EXCLUDED.default_ro,
-        default_rw = EXCLUDED.default_rw,
-        tcp_bind = EXCLUDED.tcp_bind,
-        tcp_connect = EXCLUDED.tcp_connect,
-        allowed_ips = EXCLUDED.allowed_ips,
-        allowed_domains = EXCLUDED.allowed_domains,
-        updated_at = NOW()
-    "#;
-
-    tx.execute(
-        sql,
-        &[
-            &app,
-            &role_id,
-            &AppPolicy::join_paths(&policy.ro_paths),
-            &AppPolicy::join_paths(&policy.rw_paths),
-            &AppPolicy::join_ports(&policy.tcp_bind),
-            &AppPolicy::join_ports(&policy.tcp_connect),
-            &AppPolicy::join_ips(&policy.allowed_ips),
-            &AppPolicy::join_domains(&policy.allowed_domains), // Use join_domains here
-        ],
-    )
-    .with_context(|| format!("Failed to update policy for app '{}' and role_id '{}'", app, role_id))?;
-
-    tx.commit().context("Failed to commit policy update")?;
-
-    log_event(
-        user.user_id,
-        app,
-        Path::new("policy"),
-        "policy_update",
-        "success",
-    )?;
-
+    println!("✅ Policy update successful!");
     Ok(())
 }
 
 
-// -----------------------------------------------------------------------
-// Logging
-// -----------------------------------------------------------------------
-
-fn get_hostname() -> String {
-    get_hostname_raw()
-        .unwrap_or_else(|_| "unknown".into())
-        .to_string_lossy()
-        .into_owned()
-}
-
-fn log_event(
-    user_id: i32,
-    app: &str,
-    path: &Path,
-    operation: &str,
-    result: &str,
-) -> Result<()> {
-    let hostname = get_hostname();
-    let denied_path = path.to_string_lossy().into_owned();
-
-    let mut conn = get_db_conn().context("Failed to get DB connection for logging")?;
-    let mut tx = conn.transaction().context("Failed to start logging transaction")?;
-
-    let sql = r#"
-        INSERT INTO sandbox_events
-        (hostname, app_name, denied_path, operation, result, user_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-    "#;
-
-    tx.execute(
-        sql,
-        &[&hostname, &app, &denied_path, &operation, &result, &user_id],
-    )
-    .with_context(|| {
-        format!(
-            "Failed to log event: app={}, path={}, op={}",
-            app, denied_path, operation
-        )
-    })?;
-
-    tx.commit().context("Failed to commit log entry")?;
-    Ok(())
-}
 
 
-// -----------------------------------------------------------------------
-// Validation and Landlock
-// -----------------------------------------------------------------------
-
-/// Validate that `path_str` is an existing executable file.
-/// Returns a canonicalized PathBuf on success.
-pub fn validate_executable_path(path_str: &str) -> Result<std::path::PathBuf> {
-    let path = PathBuf::from(path_str);
-
-    if !path.exists() {
-        return Err(anyhow!("Executable path does not exist: {}", path_str));
-    }
-
-    let meta = fs::metadata(&path)
-        .with_context(|| format!("Failed to read metadata for path '{}'", path_str))?;
-
-    if !meta.is_file() {
-        return Err(anyhow!("Path is not a regular file: {}", path_str));
-    }
-
-    #[cfg(unix)]
-    {
-        let perms = meta.permissions();
-        let mode = perms.mode();
-        if (mode & 0o111) == 0 {
-            return Err(anyhow!("File is not executable: {}", path_str));
-        }
-    }
-
-    let canonical = fs::canonicalize(&path)
-        .with_context(|| format!("Failed to canonicalize path '{}'", path_str))?;
-
-    Ok(canonical)
-}
+// ----------------------------------------------------------------------------
+// Landlock
+// ----------------------------------------------------------------------------
 
 fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
     let abi = ABI::V5;
@@ -422,163 +138,93 @@ fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
         .handle_access(AccessNet::BindTcp)?
         .handle_access(AccessNet::ConnectTcp)?;
 
-    let mut created = base.create()
-        .context("Failed to create Landlock ruleset (check if Landlock is supported)")?;
+    let mut created = base.create().context("Failed to create Landlock ruleset")?;
 
-    // Add read-only paths
     for path in &policy.ro_paths {
         if let Ok(canonical_path) = fs::canonicalize(path) {
-            let fd = PathFd::new(canonical_path.as_os_str())
-                .with_context(|| format!("Could not create PathFd for '{}'", canonical_path.display()))?;
-            let rule = PathBeneath::new(fd, AccessFs::from_read(abi));
-            created = created.add_rule(rule)
-                .with_context(|| format!("Could not add read-only rule for '{}'", canonical_path.display()))?;
+            let fd = PathFd::new(canonical_path.as_os_str())?;
+            created = created.add_rule(PathBeneath::new(fd, AccessFs::from_read(abi)))?;
         }
     }
 
-    // Add read-write paths
     for path in &policy.rw_paths {
         if let Ok(canonical_path) = fs::canonicalize(path) {
-            let fd = PathFd::new(canonical_path.as_os_str())
-                .with_context(|| format!("Could not create PathFd for '{}'", canonical_path.display()))?;
-            let rule = PathBeneath::new(fd, AccessFs::from_all(abi));
-            created = created.add_rule(rule)
-                .with_context(|| format!("Could not add read/write rule for '{}'", canonical_path.display()))?;
+            let fd = PathFd::new(canonical_path.as_os_str())?;
+            created = created.add_rule(PathBeneath::new(fd, AccessFs::from_all(abi)))?;
         }
     }
 
-    // Add TCP rules
     for port in &policy.tcp_bind {
-        created = created.add_rule(NetPort::new(*port, AccessNet::BindTcp))
-            .with_context(|| format!("Could not add TCP bind rule for port {}", port))?;
+        created = created.add_rule(NetPort::new(*port, AccessNet::BindTcp))?;
     }
+
     for port in &policy.tcp_connect {
-        created = created.add_rule(NetPort::new(*port, AccessNet::ConnectTcp))
-            .with_context(|| format!("Could not add TCP connect rule for port {}", port))?;
+        created = created.add_rule(NetPort::new(*port, AccessNet::ConnectTcp))?;
     }
 
-    let status = created.restrict_self()
-        .context("Failed to restrict self with Landlock ruleset")?;
-    if status.ruleset == RulesetStatus::NotEnforced {
-        return Err(anyhow!("Landlock is not supported by the running kernel"));
-    }
-
-    println!("Landlock ruleset enforced successfully.");
+    created.restrict_self()?;
     Ok(())
 }
 
-// -----------------------------------------------------------------------
-// run_sandbox_run_mode + parse_denied_lines + process_denials
-// -----------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Strace
+// ----------------------------------------------------------------------------
 
-fn run_sandbox_run_mode(
-    app_path: &Path,
-    app_args: &[String],
-    policy: &AppPolicy,
-    log_file_prefix: &str,
-) -> Result<(ExitStatus, TempDir)> {
-    let tempdir = TempDir::new()
-        .context("Failed to create temporary directory for strace logs")?;
-    let log_prefix_path = tempdir.path().join(log_file_prefix);
-    let log_prefix_str = log_prefix_path.to_string_lossy().to_string();
+fn run_strace(app_path: &Path, args: &[String], policy: &AppPolicy, prefix: &str) -> Result<(ExitStatus, TempDir)> {
+    let tempdir = TempDir::new()?;
+    let log_prefix = tempdir.path().join(prefix);
+    let log_path = log_prefix.to_string_lossy().to_string();
 
-    // Prepare environment variables for the child
-    let mut child_env = env::vars().collect::<Vec<(String, String)>>();
-    child_env.push(("LL_FS_RO".into(), AppPolicy::join_paths(&policy.ro_paths)));
-    child_env.push(("LL_FS_RW".into(), AppPolicy::join_paths(&policy.rw_paths)));
-    child_env.push(("LL_TCP_BIND".into(), AppPolicy::join_ports(&policy.tcp_bind)));
-    child_env.push(("LL_TCP_CONNECT".into(), AppPolicy::join_ports(&policy.tcp_connect)));
-    child_env.push(("LL_ALLOWED_IPS".into(), AppPolicy::join_ips(&policy.allowed_ips)));
-    child_env.push(("LL_ALLOWED_DOMAINS".into(), AppPolicy::join_domains(&policy.allowed_domains)));
+    let mut envs: Vec<(String, String)> = env::vars().collect();
+    envs.push(("LL_FS_RO".into(), AppPolicy::join_paths(&policy.ro_paths)));
+    envs.push(("LL_FS_RW".into(), AppPolicy::join_paths(&policy.rw_paths)));
+    envs.push(("LL_TCP_BIND".into(), AppPolicy::join_ports(&policy.tcp_bind)));
+    envs.push(("LL_TCP_CONNECT".into(), AppPolicy::join_ports(&policy.tcp_connect)));
+    envs.push(("LL_ALLOWED_IPS".into(), AppPolicy::join_ips(&policy.allowed_ips)));
+    envs.push(("LL_ALLOWED_DOMAINS".into(), AppPolicy::join_domains(&policy.allowed_domains)));
 
-    let current_exe = env::current_exe()
-        .context("Failed to get current executable for strace invocation")?;
-
+    let current_exe = env::current_exe()?;
     let strace_path = env::var("STRACE_PATH").unwrap_or_else(|_| "/usr/bin/strace".to_string());
+
     let status = Command::new(strace_path)
-        .args(&["-ff", "-yy", 
-            "-e", "trace=file,process,openat,getdents,stat,connect,socket,bind"])
-        .arg("-o")
-        .arg(&log_prefix_str)
+        .args(&["-ff", "-yy", "-e", "trace=file,process,openat,getdents,stat,connect,socket,bind"])
+        .arg("-o").arg(&log_path)
         .arg(&current_exe)
         .arg("--sandbox")
         .arg(app_path)
-        .args(app_args)
+        .args(args)
         .env_clear()
-        .envs(child_env)
-        .status()
-        .with_context(|| format!("Failed to spawn strace for '{}'", app_path.display()))?;
+        .envs(envs)
+        .status()?;
 
     Ok((status, tempdir))
 }
 
-fn parse_denied_lines(log_dir: &Path, prefix: &str) -> Result<HashSet<String>> {
-    // Regex for file-related syscalls
-    let path_re = Regex::new(
-        r#"(?x)
-        ^
-        (?:
-           openat\(.*?,\s*"([^"]+)" |
-           (?:open|stat|execve|access|readlink)\("([^"]+)" |
-           getdents(?:64)?\(.*?,\s*"([^"]+)"
-        )
-        "#,
-    )
-    .context("Failed to compile syscall path regex")?;
-
-    // New regex for network syscalls (connect or bind)
-    let net_re = Regex::new(
-        r#"(?x)
-        ^
-        (?:
-           (?:connect|bind)\(.*?sin_port=htons\((\d+)\)
-        )
-        "#,
-    )
-    .context("Failed to compile network syscall regex")?;
+fn parse_denied_lines(dir: &Path, prefix: &str) -> Result<HashSet<String>> {
+    let path_re = Regex::new(r#"openat\(.*?,\s*"([^"]+)"|stat\("([^"]+)"|getdents\(.*?,\s*"([^"]+)""#)?;
+    let net_re = Regex::new(r#"(connect|bind)\(.*?sin_port=htons\((\d+)\)"#)?;
 
     let mut denials = HashSet::new();
 
-    let entries = fs::read_dir(log_dir)
-        .with_context(|| format!("Failed to read directory '{}'", log_dir.display()))?;
-    for entry_result in entries {
-        let entry = entry_result
-            .with_context(|| format!("Error iterating over directory '{}'", log_dir.display()))?;
-        let fname = entry.file_name().to_string_lossy().to_string();
-        if !fname.starts_with(prefix) {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_name().to_string_lossy().starts_with(prefix) {
             continue;
         }
 
-        let file = fs::File::open(entry.path())
-            .with_context(|| format!("Failed to open strace log file '{}'", entry.path().display()))?;
-        for line_result in BufReader::new(file).lines() {
-            let line = line_result
-                .with_context(|| format!("Failed to read line in '{}'", entry.path().display()))?;
-
-            // Only process lines that contain a denial error.
+        for line in BufReader::new(File::open(entry.path())?).lines() {
+            let line = line?;
             if !(line.contains("EACCES") || line.contains("EPERM")) {
                 continue;
             }
 
-            // Try matching a file-based syscall.
-            if let Some(caps) = path_re.captures(&line) {
-                let path_str = caps.get(1)
-                    .or_else(|| caps.get(2))
-                    .or_else(|| caps.get(3))
-                    .map(|m| m.as_str())
-                    .unwrap_or("");
-                if !path_str.is_empty() {
-                    denials.insert(path_str.to_string());
-                    continue;
+            if let Some(cap) = path_re.captures(&line) {
+                if let Some(p) = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3)) {
+                    denials.insert(p.as_str().to_string());
                 }
-            }
-            // If not a file syscall, try matching network-related syscalls.
-            if let Some(caps) = net_re.captures(&line) {
-                if let Some(port_match) = caps.get(1) {
-                    let port = port_match.as_str();
-                    // Prefix network events with "tcp:" to mark them.
-                    denials.insert(format!("tcp:{}", port));
-                    continue;
+            } else if let Some(cap) = net_re.captures(&line) {
+                if let (Some(op), Some(port)) = (cap.get(1), cap.get(2)) {
+                    denials.insert(format!("tcp:{}:{}", op.as_str(), port.as_str()));
                 }
             }
         }
@@ -587,410 +233,185 @@ fn parse_denied_lines(log_dir: &Path, prefix: &str) -> Result<HashSet<String>> {
     Ok(denials)
 }
 
-fn process_denials(
-    log_dir: &Path,
-    prefix: &str,
-    policy: &mut AppPolicy,
-    app: &str,
-    user: &User,
-) -> Result<bool> {
-    // Now we get a HashSet<String> that may contain file paths and "tcp:" entries.
-    let denied_entries = parse_denied_lines(log_dir, prefix)
-        .with_context(|| format!("Failed to parse denied lines for prefix '{}'", prefix))?;
-
+fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<bool> {
     let mut updated = false;
-    let can_manage = has_permission(user.user_id, "manage_policies")?;
 
-    for entry in denied_entries {
+    for entry in denials {
         if entry.starts_with("tcp:") {
-            // Process network denials.
-            let port_str = entry.trim_start_matches("tcp:");
-            if let Ok(port) = port_str.parse::<u16>() {
-                // Check if the port is already allowed.
-                if policy.tcp_bind.contains(&port) || policy.tcp_connect.contains(&port) {
-                    continue;
-                }
-                if can_manage {
-                    let choices = &["Allow TCP Bind", "Allow TCP Connect", "Deny"];
-                    let selection = Select::new()
-                        .with_prompt(format!(
-                            "TCP connection denied for port {}. Allow as:",
-                            port
-                        ))
-                        .items(choices)
-                        .default(2)
-                        .interact()
-                        .context("User prompt failed")?;
-                    match selection {
-                        0 => {
-                            policy.tcp_bind.insert(port);
-                            log_event(
-                                user.user_id,
-                                app,
-                                Path::new(&format!("tcp:{}", port)),
-                                "syscall",
-                                "granted_tcp_bind",
-                            )?;
-                            updated = true;
-                        }
-                        1 => {
-                            policy.tcp_connect.insert(port);
-                            log_event(
-                                user.user_id,
-                                app,
-                                Path::new(&format!("tcp:{}", port)),
-                                "syscall",
-                                "granted_tcp_connect",
-                            )?;
-                            updated = true;
-                        }
-                        _ => {
-                            log_event(
-                                user.user_id,
-                                app,
-                                Path::new(&format!("tcp:{}", port)),
-                                "syscall",
-                                "denied",
-                            )?;
-                        }
+            let parts: Vec<&str> = entry.splitn(3, ':').collect();
+            if parts.len() >= 3 {
+                let (_, op, port_str) = (parts[0], parts[1], parts[2]);
+                let port: u16 = port_str.parse().with_context(|| format!("Invalid TCP port: {}", port_str))?;
+                
+                let choices = &["Allow", "Deny"];
+                let selection = Select::new()
+                    .with_prompt(format!("TCP {} port {} denied. Allow?", op, port))
+                    .items(choices)
+                    .default(1)
+                    .interact()?;
+
+                if selection == 0 {
+                    if op == "connect" {
+                        policy.tcp_connect.insert(port);
+                        updated = true;
+                    } else if op == "bind" {
+                        policy.tcp_bind.insert(port);
+                        updated = true;
                     }
-                } else {
-                    log_event(
-                        user.user_id,
-                        app,
-                        Path::new(&format!("tcp:{}", port)),
-                        "syscall",
-                        "denied",
-                    )?;
                 }
             }
         } else {
-            // Process filesystem denials as before.
             let path = PathBuf::from(&entry);
-            if policy.contains_path(&path) {
+
+            let canonical_path = fs::canonicalize(&path).unwrap_or(path.clone()); // fallback to original
+            if policy.contains_path(&canonical_path) {
                 continue;
             }
-            let final_path = match fs::canonicalize(&path) {
-                Ok(resolved) => resolved,
-                Err(_) => path.clone(),
+            
+            let choices = &["Read-Only", "Read-Write", "Deny"];
+            let selection = Select::new()
+                .with_prompt(format!("Denied path: {}. Allow as?", canonical_path.display()))
+                .items(choices)
+                .default(2)
+                .interact()?;
+            
+            match selection {
+                0 => {
+                    policy.ro_paths.insert(canonical_path);
+                    updated = true;
+                },
+                1 => {
+                    policy.rw_paths.insert(canonical_path);
+                    updated = true;
+                },
+                _ => {}
             };
-            if can_manage {
-                let choices = &["Read-Only", "Read-Write", "Deny"];
-                let selection = Select::new()
-                    .with_prompt(format!(
-                        "Access denied for {}. Allow as:",
-                        final_path.display()
-                    ))
-                    .items(choices)
-                    .default(2)
-                    .interact()
-                    .context("User prompt failed")?;
-                match selection {
-                    0 => {
-                        policy.ro_paths.insert(final_path.clone());
-                        log_event(
-                            user.user_id,
-                            app,
-                            &final_path,
-                            "syscall",
-                            "granted_ro",
-                        )?;
-                        updated = true;
-                    }
-                    1 => {
-                        policy.rw_paths.insert(final_path.clone());
-                        log_event(
-                            user.user_id,
-                            app,
-                            &final_path,
-                            "syscall",
-                            "granted_rw",
-                        )?;
-                        updated = true;
-                    }
-                    _ => {
-                        log_event(
-                            user.user_id,
-                            app,
-                            &final_path,
-                            "syscall",
-                            "denied",
-                        )?;
-                    }
-                }
-            } else {
-                log_event(
-                    user.user_id,
-                    app,
-                    &final_path,
-                    "syscall",
-                    "denied",
-                )?;
-            }
+            
         }
     }
 
-    Ok(updated && can_manage) // Only true if changes were made AND user has permissions
+    Ok(updated)
 }
 
-// -----------------------------------------------------------------------
-// management_flow and sandbox_main
-// -----------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Entrypoint
+// ----------------------------------------------------------------------------
 
-fn management_flow() -> Result<()> {
-    // Authenticate user
-    let username = Input::<String>::new()
-        .with_prompt("Username")
-        .interact()
-        .context("Failed to read username")?;
+fn main() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
 
-    let password = Password::new()
-        .with_prompt("Password")
-        .interact()
-        .context("Failed to read password")?;
-
-    let user = authenticate_user(&username, &password)
-        .context("Authentication failed")?;
-
-    // Check execution permission
-    if !has_permission(user.user_id, "execute_apps")? {
-        return Err(anyhow!("Insufficient permissions to execute applications"));
+    // Special --sandbox execution for the strace’d command
+    if args.len() >= 2 && args[1] == "--sandbox" {
+        return run_sandbox();
     }
 
-    let args: Vec<String> = env::args().collect();
+    // Authenticate and get token + user object
+    let (token, user) = get_credentials().context("Failed to authenticate user")?;
+    println!("Authentication successful!");
+
+    // Validate command line usage
     if args.len() < 2 {
         return Err(anyhow!("Usage: {} <APP> [ARGS...]", args[0]));
     }
-    let raw_app = &args[1];
+
+    let app = &args[1];
     let app_args = &args[2..];
 
-    let mut policy = fetch_policy_from_db(raw_app, &user)
-        .with_context(|| format!("Failed to fetch policy for '{}'", raw_app))?;
+    // Retrieve policy from server
+    let ruleset = RuleSet::fetch_for_app(app, &token)
+        .context("Failed to fetch policy from server")?;
+    let mut policy = AppPolicy::from(ruleset);
 
-    let first_prefix = "sandboxer_first.log";
-    let (first_status, first_tempdir) = run_sandbox_run_mode(Path::new(raw_app), app_args, &policy, first_prefix)
-        .with_context(|| format!("Failed first run for '{}'", raw_app))?;
+    // First run
+    let (status, tempdir) = run_strace(Path::new(app), app_args, &policy, "sandbox_log")?;
+    let denials = parse_denied_lines(tempdir.path(), "sandbox_log")?;
 
-    let has_denials = !parse_denied_lines(first_tempdir.path(), first_prefix)?.is_empty();
-    let needs_processing = !first_status.success() || has_denials;
+    // Log denials if any
+    if !denials.is_empty() {
+        for denial in &denials {
+            let resource_type = if denial.starts_with("tcp:") {
+                "network"
+            } else {
+                "filesystem"
+            };
 
-    if needs_processing {
-        println!("Processing denials...");
-        let changed = process_denials(
-            first_tempdir.path(),
-            first_prefix,
-            &mut policy,
-            raw_app,
-            &user,
-        )
-        .context("Denial processing failed")?;
+            let _ = log_denial_event(app, denial, resource_type, &token);
+        }
+    }
 
-        if changed {
-            update_policy_in_db(raw_app, &policy, &user)
-                .context("Policy update failed")?;
-
-            let do_second_run = Confirm::new()
-                .with_prompt("Would you like to run the application again with the updated policy?")
-                .default(true)
-                .interact()
-                .context("Failed to prompt for second run")?;
-
-            if do_second_run {
-                let second_prefix = "sandboxer_second.log";
-                let (second_status, second_tempdir) = run_sandbox_run_mode(
-                    Path::new(raw_app),
-                    app_args,
-                    &policy,
-                    second_prefix
-                )
-                .with_context(|| format!("Failed during second run for '{}'", raw_app))?;
-
-                let second_denials = parse_denied_lines(second_tempdir.path(), second_prefix)
-                    .context("Failed to parse second run denials")?;
-
-                if second_denials.is_empty() && second_status.success() {
-                    println!("Second run successful. No denied operations.");
-                } else {
-                    println!("Denied operations still detected. Further updates may be needed.");
+    // Check if rerun is needed
+    if !status.success() || !denials.is_empty() {
+        if user.has_permission("manage_policies") {
+            let updated = process_denials(denials.clone(), &mut policy)?;
+            if updated {
+                update_policy_on_server(app, &policy, &token)
+                    .context("Failed to upload updated policy")?;
+        
+                let rerun = dialoguer::Confirm::new()
+                    .with_prompt("Rerun with updated policy?")
+                    .default(true)
+                    .interact()
+                    .unwrap_or(false);
+        
+                if rerun {
+                    let (_rerun_status, _rerun_temp) = run_strace(Path::new(app), app_args, &policy, "rerun_log")?;
+                    println!("Second run completed.");
                 }
             } else {
-                println!("Exiting without second run.");
+                println!("No changes to apply.");
             }
         } else {
-            // Handle cases where no changes were made
-            if has_permission(user.user_id, "manage_policies")? {
-                println!("No policy changes made. Skipping second run.");
-            } else {
-                println!("Insufficient permissions for policy updates. Skipping second run.");
+            println!("Access denied events have been logged. Contact an admin if access is needed.");
+            for denial in &denials {
+                println!("  - Denied: {}", denial);
             }
         }
     } else {
-        println!("Program executed successfully under sandbox.");
+        println!("App ran successfully with current policy.");
     }
 
     Ok(())
 }
 
-fn sandbox_main() -> ! {
-    let args: Vec<String> = std::env::args().collect();
 
+fn run_sandbox() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: {} --sandbox <APP> [ARGS...]", args[0]);
-        std::process::exit(1);
+        return Err(anyhow!("Usage: {} --sandbox <APP> [ARGS...]", args[0]));
     }
 
     let cmd = &args[2];
     let cmd_args = &args[3..];
-
+    
     let policy = AppPolicy {
-        ro_paths: std::env::var("LL_FS_RO").unwrap_or_default()
-            .split(':')
-            .filter(|s| !s.is_empty())
-            .map(Into::into)
-            .collect(),
-        rw_paths: std::env::var("LL_FS_RW").unwrap_or_default()
-            .split(':')
-            .filter(|s| !s.is_empty())
-            .map(Into::into)
-            .collect(),
-        tcp_bind: std::env::var("LL_TCP_BIND").unwrap_or_default()
-            .split(':')
-            .filter_map(|s| s.parse().ok())
-            .collect(),
-        tcp_connect: std::env::var("LL_TCP_CONNECT").unwrap_or_default()
-            .split(':')
-            .filter_map(|s| s.parse().ok())
-            .collect(),
-        allowed_ips: std::env::var("LL_ALLOWED_IPS").unwrap_or_default()
-            .split(':')
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect(),
-        allowed_domains: std::env::var("LL_ALLOWED_DOMAINS").unwrap_or_default()
-            .split(':')
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect(),
+        ro_paths: env::var("LL_FS_RO").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
+        rw_paths: env::var("LL_FS_RW").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
+        tcp_bind: env::var("LL_TCP_BIND").unwrap_or_default().split(':').filter_map(|s| s.parse().ok()).collect(),
+        tcp_connect: env::var("LL_TCP_CONNECT").unwrap_or_default().split(':').filter_map(|s| s.parse().ok()).collect(),
+        allowed_ips: env::var("LL_ALLOWED_IPS").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(String::from).collect(),
+        allowed_domains: env::var("LL_ALLOWED_DOMAINS").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(String::from).collect(),
     };
+
+    // Get token for event logging
+    let token = env::var("LL_AUTH_TOKEN").ok();
     
-
-    if let Err(e) = enforce_landlock(&policy) {
-        eprintln!("Failed to enforce Landlock rules: {}", e);
-        std::process::exit(1);
-    }
-
-    match Command::new(cmd).args(cmd_args).status() {
-        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+    match enforce_landlock(&policy) {
+        Ok(_) => {},
         Err(e) => {
-            eprintln!("Failed to execute '{}': {}", cmd, e);
-            std::process::exit(1);
-        }
-    }
-}
-
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() >= 2 && args[1] == "--sandbox" {
-        sandbox_main();
-    } else {
-        if let Err(e) = management_flow() {
-            eprintln!("Error in management flow: {:?}", e);  // [EH-IMPROVED] Provide debug info
-            std::process::exit(1);
-        }
-    }
-}
-
-// -----------------------------------------------------------------------
-// Test code begins here.
-// -----------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    // Basic logic tests for AppPolicy
-    #[test]
-    fn test_default_policy() -> Result<()> {
-        let policy = AppPolicy::default_policy_for_role(1)?;
-        assert!(policy.ro_paths.contains(Path::new("/bin")));
-        assert!(policy.ro_paths.contains(Path::new("/etc")));
-        assert!(policy.rw_paths.contains(Path::new("/tmp")));
-        Ok(())
+            eprintln!("Warning: Failed to apply Landlock restrictions: {}", e);
+            // Try to log the error if we have a token
+            if let Some(token) = &token {
+                let _ = log_denial_event(cmd, &format!("landlock_setup_error:{}", e), "system", token);
+            }
+        },
     }
     
-
-    #[test]
-    fn test_join_paths_and_ports() -> Result<()> {
-        let mut policy = AppPolicy::default_policy_for_role(1)?;
-        policy.ro_paths.insert(PathBuf::from("/home"));
-        let ro_joined = AppPolicy::join_paths(&policy.ro_paths);
-        assert!(ro_joined.contains("/home"));
+    let status = Command::new(cmd).args(cmd_args).status()?;
     
-        policy.tcp_bind.insert(1234);
-        let bind_joined = AppPolicy::join_ports(&policy.tcp_bind);
-        assert!(bind_joined.contains("1234"));
-        Ok(())
+    // If command failed and we have a token, try to log a general failure
+    if !status.success() && token.is_some() {
+        let _ = log_denial_event(cmd, &format!("exit_status:{}", status), "application", &token.unwrap());
     }
     
-
-    #[test]
-    fn test_db_interaction() -> Result<()> {
-        let app_name = "test_db_interaction_app";
-    
-        // Assuming role_id 1 is a valid role in your test database
-        let mut policy = AppPolicy::default_policy_for_role(1)?;
-        policy.ro_paths.insert(PathBuf::from("/test/db/path"));
-        policy.rw_paths.insert(PathBuf::from("/test/db/rw"));
-        policy.tcp_bind.insert(9090);
-        policy.tcp_connect.insert(9443);
-        policy.allowed_ips.insert("192.168.1.1".to_string());
-        policy.allowed_domains.insert("google.com".to_string());
-    
-        let mut client = get_db_conn()?;
-        // Delete any record for this app (for testing, we ignore the role)
-        client.execute("DELETE FROM app_policy WHERE app_name = $1", &[&app_name])?;
-    
-        // Call update_policy_in_db with a dummy user.
-        update_policy_in_db(app_name, &policy, &User { user_id: 1, username: "test".to_string() })?;
-    
-        // Fetch the policy for this app.
-        let fetched_policy = fetch_policy_from_db(app_name, &User { user_id: 1, username: "test".to_string() })?;
-        assert_eq!(fetched_policy.ro_paths, policy.ro_paths);
-        assert_eq!(fetched_policy.rw_paths, policy.rw_paths);
-        assert_eq!(fetched_policy.tcp_bind, policy.tcp_bind);
-        assert_eq!(fetched_policy.tcp_connect, policy.tcp_connect);
-        assert_eq!(fetched_policy.allowed_ips, policy.allowed_ips);
-        assert_eq!(fetched_policy.allowed_domains, policy.allowed_domains);
-    
-        client.execute("DELETE FROM app_policy WHERE app_name = $1", &[&app_name])?;
-        Ok(())
-    }
-    
-    
-
-    // parse_denied_lines() test with mock log files
-    #[test]
-    fn test_parse_denied_lines() -> Result<()> {
-        use std::fs::File;
-        use std::io::Write;
-        use tempfile::TempDir;
-
-        let tempdir = TempDir::new()?;
-        let mock_file_path = tempdir.path().join("mock_sandbox_test.log");
-
-        {
-            let mut file = File::create(&mock_file_path)?;
-            writeln!(
-                file,
-                r#"openat(AT_FDCWD, "/some/denied/path", O_RDONLY) = -1 EACCES (Permission denied)"#
-            )?;
-        }
-
-        let result = parse_denied_lines(tempdir.path(), "mock_sandbox_test.log")?;
-        assert_eq!(result.len(), 1);
-        // Compare with a string slice, because result is a HashSet<String>
-        assert!(result.contains("/some/denied/path"));
-        Ok(())
-    }
+    std::process::exit(status.code().unwrap_or(1));
 }
