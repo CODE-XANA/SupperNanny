@@ -5,6 +5,7 @@ mod ruleset;
 mod models;
 mod events;
 mod utils;
+mod policy;
 
 use axum::{
     extract::Extension,
@@ -31,6 +32,7 @@ use auth::handlers::{login, who_am_i};
 use roles::get_roles;
 use crate::events::log_event;
 use crate::state::AppState;
+use crate::policy::handler::add_app_policy;
 
 #[derive(Clone, Copy)]
 pub struct SafeIpExtractor;
@@ -89,6 +91,7 @@ async fn main() {
         .route("/auth/roles", get(get_roles))
         .route("/auth/ruleset", get(get_ruleset))
         .route("/events/log", post(log_event))
+        .route("/auth/ruleset/update", post(add_app_policy))
         .layer(GovernorLayer {
             config: governor_cfg,
         })

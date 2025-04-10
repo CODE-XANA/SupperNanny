@@ -16,7 +16,7 @@ DROP TABLE IF EXISTS permissions CASCADE;
 DROP TABLE IF EXISTS roles CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS default_policies CASCADE;
-
+DROP TABLE IF EXISTS security_logs
 -- ========== TABLES ==========
 
 -- Users
@@ -97,6 +97,16 @@ CREATE TABLE sandbox_events (
     remote_ip TEXT,
     domain TEXT,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+CREATE TABLE security_logs (
+    log_id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+    username TEXT,
+    ip_address TEXT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'critical'))
 );
 
 -- ========== SEED DATA ==========

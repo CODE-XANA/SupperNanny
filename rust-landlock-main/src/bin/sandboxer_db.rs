@@ -220,8 +220,13 @@ fn parse_denied_lines(dir: &Path, prefix: &str) -> Result<HashSet<String>> {
 
             if let Some(cap) = path_re.captures(&line) {
                 if let Some(p) = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3)) {
-                    denials.insert(p.as_str().to_string());
+                    let raw_path = PathBuf::from(p.as_str());
+                
+                    let canonical_path = fs::canonicalize(&raw_path).unwrap_or(raw_path);
+                
+                    denials.insert(canonical_path.to_string_lossy().to_string());
                 }
+                
             } else if let Some(cap) = net_re.captures(&line) {
                 if let (Some(op), Some(port)) = (cap.get(1), cap.get(2)) {
                     denials.insert(format!("tcp:{}:{}", op.as_str(), port.as_str()));

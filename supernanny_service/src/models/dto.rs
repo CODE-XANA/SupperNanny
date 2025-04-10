@@ -39,3 +39,14 @@ pub struct LogEventRequest {
     pub domain: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AppPolicyCreateRequest {
+    pub app_name: String,
+    pub role_id: i32,
+    pub default_ro: String,
+    pub default_rw: String,
+    pub tcp_bind: String,
+    pub tcp_connect: String,
+    pub allowed_ips: String,
+    pub allowed_domains: String,
+}
