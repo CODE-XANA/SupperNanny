@@ -13,21 +13,39 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use tempfile::TempDir;
-use supernanny_sandboxer::policy_client::{RuleSet, RuleSetRaw};
+use supernanny_sandboxer::policy_client::RuleSet;
 use supernanny_sandboxer::policy_client::{User, log_denial_event};
+use serde::{Deserialize, Serialize};
 
 // ----------------------------------------------------------------------------
 // AppPolicy
 // ----------------------------------------------------------------------------
 
 #[derive(Debug)]
-struct AppPolicy {
+pub struct AppPolicy {
     ro_paths: HashSet<PathBuf>,
     rw_paths: HashSet<PathBuf>,
     tcp_bind: HashSet<u16>,
     tcp_connect: HashSet<u16>,
     allowed_ips: HashSet<String>,
     allowed_domains: HashSet<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RoleCheckResponse {
+    permissions: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct PolicyPayload {
+    app_name: String,
+    role_id: i32,
+    default_ro: String,
+    default_rw: String,
+    tcp_bind: String,
+    tcp_connect: String,
+    allowed_ips: String,
+    allowed_domains: String,
 }
 
 impl From<RuleSet> for AppPolicy {
@@ -63,17 +81,6 @@ impl AppPolicy {
     fn join_domains(domains: &HashSet<String>) -> String {
         domains.iter().cloned().collect::<Vec<_>>().join(":")
     }
-
-    fn to_raw(&self) -> RuleSetRaw {
-        RuleSetRaw {
-            default_ro: Self::join_paths(&self.ro_paths),
-            default_rw: Self::join_paths(&self.rw_paths),
-            tcp_bind: Self::join_ports(&self.tcp_bind),
-            tcp_connect: Self::join_ports(&self.tcp_connect),
-            allowed_ips: Self::join_ips(&self.allowed_ips),
-            allowed_domains: Self::join_domains(&self.allowed_domains),
-        }
-    }
 }
 
 // ----------------------------------------------------------------------------
@@ -99,28 +106,57 @@ fn get_credentials() -> Result<(String, User)> {
 // Server communication
 // ----------------------------------------------------------------------------
 
-fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str) -> Result<()> {
-    let raw = policy.to_raw();
+pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str) -> Result<()> {
     let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3005".into());
-
-    // Use correct endpoint with app_name in query
-    let url = format!("{}/auth/ruleset?app_name={}", base_url, app);
-
     let client = Client::new();
 
-    // Directly send raw (not wrapped in `{ "policy": ... }`)
+    // 🔎 Step 1: Check if user has "manage_policies"
+    let roles_url = format!("{}/auth/roles", base_url);
     let res = client
-        .post(&url)
+        .get(&roles_url)
         .bearer_auth(token)
-        .json(&raw)
         .send()
-        .context("Failed to send policy update to server")?;
+        .context("Failed to fetch user permissions")?;
+
+    if !res.status().is_success() {
+        return Err(anyhow!("Could not verify user permissions: {}", res.status()));
+    }
+
+    let roles_info: RoleCheckResponse = res
+        .json()
+        .context("Failed to parse roles response")?;
+
+    if !roles_info.permissions.contains(&"manage_policies".to_string()) {
+        println!("🚫 User does not have 'manage_policies' permission. Skipping policy update.");
+        return Ok(());
+    }
+
+    // Step 2: Send the policy update
+    let update_url = format!("{}/auth/ruleset/update", base_url);
+
+    let payload = PolicyPayload {
+        app_name: app.to_string(),
+        role_id: 1, // You may keep it static or decode from JWT if needed
+        default_ro: AppPolicy::join_paths(&policy.ro_paths),
+        default_rw: AppPolicy::join_paths(&policy.rw_paths),
+        tcp_bind: AppPolicy::join_ports(&policy.tcp_bind),
+        tcp_connect: AppPolicy::join_ports(&policy.tcp_connect),
+        allowed_ips: AppPolicy::join_ips(&policy.allowed_ips),
+        allowed_domains: AppPolicy::join_domains(&policy.allowed_domains),
+    };
+
+    let res = client
+        .post(&update_url)
+        .bearer_auth(token)
+        .json(&payload)
+        .send()
+        .context("Failed to send policy update")?;
 
     if !res.status().is_success() {
         return Err(anyhow!("Policy update failed: {}", res.status()));
     }
 
-    println!("✅ Policy update successful!");
+    println!("✅ Policy update successfully posted to server!");
     Ok(())
 }
 
@@ -365,7 +401,8 @@ fn main() -> Result<()> {
             } else {
                 println!("No changes to apply.");
             }
-        } else {
+        }        
+        else {
             println!("Access denied events have been logged. Contact an admin if access is needed.");
             for denial in &denials {
                 println!("  - Denied: {}", denial);
