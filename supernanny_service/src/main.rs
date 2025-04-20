@@ -1,11 +1,11 @@
-mod state;
 mod auth;
+mod events;
+mod models;
+mod policy;
 mod roles;
 mod ruleset;
-mod models;
-mod events;
+mod state;
 mod utils;
-mod policy;
 
 use axum::{
     extract::Extension,
@@ -23,23 +23,26 @@ use tokio;
 use tower_governor::{
     governor::GovernorConfigBuilder,
     key_extractor::KeyExtractor,
-    GovernorLayer,
     GovernorError,
+    GovernorLayer,
 };
 use tracing::info;
-use crate::ruleset::handlers::get_ruleset;
-use auth::handlers::{login, who_am_i};
-use roles::get_roles;
+
+use crate::auth::handlers::{login, who_am_i};
 use crate::events::log_event;
+use crate::policy::handler::{
+    add_app_policy, get_policy_requests, process_policy_request, request_policy_change,
+};
+use crate::roles::get_roles;
+use crate::ruleset::handlers::get_ruleset;
 use crate::state::AppState;
-use crate::policy::handler::add_app_policy;
 
 #[derive(Clone, Copy)]
 pub struct SafeIpExtractor;
 
 impl KeyExtractor for SafeIpExtractor {
     type Key = IpAddr;
-    
+
     fn extract<B>(&self, req: &Request<B>) -> Result<IpAddr, GovernorError> {
         Ok(req.extensions()
             .get::<SocketAddr>()
@@ -51,12 +54,12 @@ impl KeyExtractor for SafeIpExtractor {
     }
 }
 
-
 #[tokio::main]
 async fn main() {
     dotenv().ok();
     tracing_subscriber::fmt::init();
 
+    // 🌐 DB connection
     let db_url = format!(
         "postgres://{}:{}@{}:{}/{}",
         std::env::var("DB_USER").unwrap(),
@@ -74,7 +77,7 @@ async fn main() {
 
     let app_state = AppState { db_pool: pool };
 
-    // ✅ Governor config using SafeIpExtractor
+    // 🚦 Rate limiting configuration
     let governor_cfg = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(5)
@@ -84,14 +87,18 @@ async fn main() {
             .expect("Failed to build GovernorConfig"),
     );
 
+    // 🚀 Build router
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/auth/login", post(login))
         .route("/whoami", get(who_am_i))
         .route("/auth/roles", get(get_roles))
         .route("/auth/ruleset", get(get_ruleset))
-        .route("/events/log", post(log_event))
         .route("/auth/ruleset/update", post(add_app_policy))
+        .route("/events/log", post(log_event))
+        .route("/policy/request", post(request_policy_change))
+        .route("/admin/policy/requests", get(get_policy_requests))
+        .route("/admin/policy/requests/{request_id}", post(process_policy_request))
         .layer(GovernorLayer {
             config: governor_cfg,
         })
@@ -99,11 +106,11 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3005));
     info!("🚀 Server running at http://{}", addr);
-        
+
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Failed to bind to address");
-        
+
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
