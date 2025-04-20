@@ -18,6 +18,7 @@ use crate::{
     utils::permissions::has_permission,
 };
 use tokio::task::spawn_blocking;
+use std::collections::HashSet;
 
 pub async fn add_app_policy(
     AuthUser { claims }: AuthUser,
@@ -276,19 +277,12 @@ pub async fn process_policy_request(
         return Err((StatusCode::FORBIDDEN, "Permission denied".to_string()));
     }
 
-    // Clone things we need
     let user_id = claims.user_id;
-    let request_id_clone = request_id;
-    let approve = decision.approve;
-    let reason = decision.reason.clone();
     let pool = state.db_pool.clone();
-    
-    spawn_blocking(move || {
-        let mut conn = pool.get()
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
 
-        conn.execute("BEGIN", &[])
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Transaction error: {e}")))?;
+    spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
+        conn.execute("BEGIN", &[]).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Transaction error: {e}")))?;
 
         let request = conn.query_opt(
             "SELECT request_id, app_name, role_id, requested_by, 
@@ -296,7 +290,7 @@ pub async fn process_policy_request(
                     allowed_ips, allowed_domains
              FROM policy_change_requests 
              WHERE request_id = $1 AND status = 'pending'",
-            &[&request_id_clone]
+            &[&request_id]
         ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Query error: {e}")))?;
 
         let row = match request {
@@ -309,18 +303,45 @@ pub async fn process_policy_request(
             return Err((StatusCode::FORBIDDEN, "Cannot approve your own policy change requests".to_string()));
         }
 
-        // Get values from row
         let app_name: String = row.get("app_name");
         let role_id: i32 = row.get("role_id");
-        let default_ro: String = row.get("default_ro");
-        let default_rw: String = row.get("default_rw");
-        let tcp_bind: String = row.get("tcp_bind");
-        let tcp_connect: String = row.get("tcp_connect");
-        let allowed_ips: String = row.get("allowed_ips");
-        let allowed_domains: String = row.get("allowed_domains");        
-        
+        let new_ro: String = row.get("default_ro");
+        let new_rw: String = row.get("default_rw");
+        let new_bind: String = row.get("tcp_bind");
+        let new_connect: String = row.get("tcp_connect");
+        let new_ips: String = row.get("allowed_ips");
+        let new_domains: String = row.get("allowed_domains");
 
-        if approve {
+        // Merge function for colon-separated values
+        let merge_colon_strings = |existing: String, new: String| -> String {
+            let mut set: HashSet<&str> = existing.split(':').filter(|s| !s.is_empty()).collect();
+            for val in new.split(':').filter(|s| !s.is_empty()) {
+                set.insert(val);
+            }
+            let mut merged: Vec<&str> = set.into_iter().collect();
+            merged.sort();
+            merged.join(":")
+        };
+
+        let (final_ro, final_rw, final_bind, final_connect, final_ips, final_domains) =
+            if let Some(existing_row) = conn.query_opt(
+                "SELECT default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains
+                 FROM app_policy WHERE app_name = $1 AND role_id = $2",
+                &[&app_name, &role_id]
+            ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Fetch existing policy error: {e}")))? {
+                (
+                    merge_colon_strings(existing_row.get("default_ro"), new_ro),
+                    merge_colon_strings(existing_row.get("default_rw"), new_rw),
+                    merge_colon_strings(existing_row.get("tcp_bind"), new_bind),
+                    merge_colon_strings(existing_row.get("tcp_connect"), new_connect),
+                    merge_colon_strings(existing_row.get("allowed_ips"), new_ips),
+                    merge_colon_strings(existing_row.get("allowed_domains"), new_domains),
+                )
+            } else {
+                (new_ro, new_rw, new_bind, new_connect, new_ips, new_domains)
+            };
+
+        if decision.approve {
             conn.execute(
                 "INSERT INTO app_policy (
                     app_name, role_id, default_ro, default_rw, tcp_bind, tcp_connect,
@@ -329,39 +350,28 @@ pub async fn process_policy_request(
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
                 ON CONFLICT (app_name, role_id)
                 DO UPDATE SET
-                    default_ro = EXCLUDED.default_ro,
-                    default_rw = EXCLUDED.default_rw,
-                    tcp_bind = EXCLUDED.tcp_bind,
-                    tcp_connect = EXCLUDED.tcp_connect,
-                    allowed_ips = EXCLUDED.allowed_ips,
-                    allowed_domains = EXCLUDED.allowed_domains,
+                    default_ro = $3,
+                    default_rw = $4,
+                    tcp_bind = $5,
+                    tcp_connect = $6,
+                    allowed_ips = $7,
+                    allowed_domains = $8,
                     updated_at = NOW()",
-                &[
-                    &app_name, &role_id,
-                    &default_ro,
-                    &default_rw,
-                    &tcp_bind,
-                    &tcp_connect,
-                    &allowed_ips,
-                    &allowed_domains
-                ]
-            )
-            .map_err(|e| {
+                &[&app_name, &role_id, &final_ro, &final_rw, &final_bind, &final_connect, &final_ips, &final_domains]
+            ).map_err(|e| {
                 let _ = conn.execute("ROLLBACK", &[]);
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Policy update error: {e}"))
             })?;
 
             conn.execute(
                 "UPDATE policy_change_requests SET status = 'approved', reviewed_by = $1, reviewed_at = NOW() WHERE request_id = $2",
-                &[&user_id, &request_id_clone]
+                &[&user_id, &request_id]
             ).map_err(|e| {
                 let _ = conn.execute("ROLLBACK", &[]);
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Status update error: {e}"))
             })?;
 
-            let detail = format!("Approved policy change request #{} for app {} and role {}", 
-                request_id_clone, app_name, role_id);
-                
+            let detail = format!("Approved policy change request #{} for app {} and role {}", request_id, app_name, role_id);
             conn.execute(
                 "INSERT INTO security_logs (username, action, detail, severity)
                  SELECT u.username, 'policy_change_approved', $1, 'info'
@@ -371,15 +381,14 @@ pub async fn process_policy_request(
         } else {
             conn.execute(
                 "UPDATE policy_change_requests SET status = 'rejected', reviewed_by = $1, reviewed_at = NOW() WHERE request_id = $2",
-                &[&user_id, &request_id_clone]
+                &[&user_id, &request_id]
             ).map_err(|e| {
                 let _ = conn.execute("ROLLBACK", &[]);
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Status update error: {e}"))
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Rejection update error: {e}"))
             })?;
 
-            let detail = format!("Rejected policy change request #{} with reason: {}", 
-                request_id_clone, reason.unwrap_or_else(|| "No reason provided".to_string()));
-                
+            let reason = decision.reason.clone().unwrap_or_else(|| "No reason provided".to_string());
+            let detail = format!("Rejected policy change request #{} with reason: {}", request_id, reason);
             conn.execute(
                 "INSERT INTO security_logs (username, action, detail, severity)
                  SELECT u.username, 'policy_change_rejected', $1, 'warning'
@@ -388,11 +397,10 @@ pub async fn process_policy_request(
             ).ok();
         }
 
-        conn.execute("COMMIT", &[])
-            .map_err(|e| {
-                let _ = conn.execute("ROLLBACK", &[]);
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Commit error: {e}"))
-            })?;
+        conn.execute("COMMIT", &[]).map_err(|e| {
+            let _ = conn.execute("ROLLBACK", &[]);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Commit error: {e}"))
+        })?;
 
         Ok::<_, (StatusCode, String)>(())
     })

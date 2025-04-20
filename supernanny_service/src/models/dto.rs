@@ -77,14 +77,19 @@ pub struct PolicyRequestDetail {
     pub requested_by: String,
     pub requested_at: String,
     pub status: String,
-    pub default_ro: bool,
-    pub default_rw: bool,
-    pub tcp_bind: bool,
-    pub tcp_connect: bool,
-    pub allowed_ips: Vec<String>,         
-    pub allowed_domains: Vec<String>,     
+
+    // FIX HERE 👇
+    pub default_ro: String,
+    pub default_rw: String,
+    pub tcp_bind: String,
+    pub tcp_connect: String,
+    pub allowed_ips: String,
+    pub allowed_domains: String,
+
     pub change_justification: String,
 }
+
+
 
 
 #[derive(Deserialize)]

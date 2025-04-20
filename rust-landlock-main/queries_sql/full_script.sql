@@ -92,9 +92,6 @@ CREATE TABLE policy_change_requests (
 
     reviewed_by INTEGER REFERENCES users(user_id),
     reviewed_at TIMESTAMP,
-
-    CONSTRAINT unique_pending_requests UNIQUE (app_name, role_id, requested_by)
-        DEFERRABLE INITIALLY IMMEDIATE
 );
 
 CREATE UNIQUE INDEX idx_unique_pending_requests 
