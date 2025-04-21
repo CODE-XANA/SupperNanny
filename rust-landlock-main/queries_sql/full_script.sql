@@ -91,7 +91,7 @@ CREATE TABLE policy_change_requests (
     requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     reviewed_by INTEGER REFERENCES users(user_id),
-    reviewed_at TIMESTAMP,
+    reviewed_at TIMESTAMP
 );
 
 CREATE UNIQUE INDEX idx_unique_pending_requests 
@@ -143,18 +143,18 @@ INSERT INTO permissions (permission_id, permission_name) VALUES
   (1, 'manage_policies'),
   (2, 'view_events'),
   (3, 'execute_apps'),
-  (4, 'view_policies');
+  (4, 'view_policies'),
   (5, 'approve_policies');
 
 INSERT INTO role_permissions (role_id, permission_id) VALUES
-  (1, 1), (1, 2), (1, 3), (1, 4), (1, 5);
+  (1, 1), (1, 2), (1, 3), (1, 4), (1, 5),
   (2, 2), (2, 3),
   (3, 3);
 
 INSERT INTO users (user_id, username, password_hash) VALUES
   (1, 'admin',     '$2a$12$Gp.L8taKXJqc/N/T40fbyekjONH1PaioOfDcvHkubYVDOurNXRoPi'),
   (2, 'developer', '$2a$12$OtLIa4HYtsp3nnbx4zQYjOpID.eohUtJYbf5Vu.tgS/hZZ0XLgEVe'),
-  (3, 'regular',   '$2a$12$tfr8QKoe8jy66nlHXOIlMeAHfxn5vj7inaLuBco3eiDmAJJVEDdBy');
+  (3, 'regular',   '$2a$12$tfr8QKoe8jy66nlHXOIlMeAHfxn5vj7inaLuBco3eiDmAJJVEDdBy'),
   (4, 'reviewer',  '$2a$12$uSLo1q6uaGrXXdkBRxbTy.ugy1nW7Q2uhXtnZXV9AviPa8kcWGbF.');
 
 INSERT INTO user_roles (user_id, role_id) VALUES
@@ -168,7 +168,8 @@ INSERT INTO default_policies (
   (3, '/bin:/usr:/dev/urandom:/etc:/proc:/lib', '/tmp:/dev/zero:/dev/full:/dev/pts:/dev/null', '9418', '80:443', '127.0.0.1/8:192.168.1.0/24', 'localhost:user.com');
 
 INSERT INTO app_policy (
-  app_name, role_id, default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains, updated_at
+  app_name, role_id, default_ro, default_rw, tcp_bind, tcp_connect,
+  allowed_ips, allowed_domains, updated_at
 ) VALUES
   ('/bin/firefox', 2,
    '/bin:/usr:/dev/urandom:/etc:/proc:/lib:/dev/dri:/dev/snd:/dev/fb0',
@@ -178,8 +179,29 @@ INSERT INTO app_policy (
    'localhost:mozilla.org:firefox.com',
    NOW()),
   ('/bin/ping', 2,
-   '/bin:/usr:/etc:/proc:/lib:/dev', '/tmp', '0', '0',
-   '127.0.0.1/32', 'localhost', NOW());
+   '/bin:/usr:/etc:/proc:/lib:/dev',
+   '/tmp',
+   '0', '0',
+   '127.0.0.1/32',
+   'localhost',
+   NOW()),
+  ('/bin/ls', 1,
+   '/bin:/usr:/etc:/proc:/lib',
+   '/tmp',
+   '',
+   '',
+   '127.0.0.1/32',
+   'localhost',
+   NOW()),
+  ('/bin/ls', 2,
+   '/bin:/usr:/etc:/proc:/lib',
+   '/tmp',
+   '',
+   '',
+   '127.0.0.1/32',
+   'localhost',
+   NOW());
+
 
 -- ---------- SEQUENCE ALIGNMENT ---------------------------
 SELECT setval('roles_role_id_seq',             (SELECT MAX(role_id) FROM roles));
