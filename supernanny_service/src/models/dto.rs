@@ -50,3 +50,50 @@ pub struct AppPolicyCreateRequest {
     pub allowed_ips: String,
     pub allowed_domains: String,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PolicyChangeRequest {
+    pub app_name: String,
+    pub role_id: i32,
+    pub default_ro: String,       
+    pub default_rw: String,
+    pub tcp_bind: String,
+    pub tcp_connect: String,
+    pub allowed_ips: String,      
+    pub allowed_domains: String,  
+    pub allowed_ro_paths: Vec<String>,     
+    pub allowed_rw_paths: Vec<String>,     
+    pub change_justification: String,
+}
+
+
+
+#[derive(Serialize, Deserialize)]
+pub struct PolicyRequestDetail {
+    pub request_id: i32,
+    pub app_name: String,
+    pub role_id: i32,
+    pub role_name: String,
+    pub requested_by: String,
+    pub requested_at: String,
+    pub status: String,
+
+    // FIX HERE 👇
+    pub default_ro: String,
+    pub default_rw: String,
+    pub tcp_bind: String,
+    pub tcp_connect: String,
+    pub allowed_ips: String,
+    pub allowed_domains: String,
+
+    pub change_justification: String,
+}
+
+
+
+
+#[derive(Deserialize)]
+pub struct PolicyRequestDecision {
+    pub approve: bool,
+    pub reason: Option<String>,
+}

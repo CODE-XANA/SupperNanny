@@ -32,7 +32,7 @@ const MAX_DOMAINS: usize = 50;
 // AppPolicy
 // ----------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AppPolicy {
     ro_paths: HashSet<PathBuf>,
     rw_paths: HashSet<PathBuf>,
@@ -45,18 +45,6 @@ pub struct AppPolicy {
 #[derive(Debug, Deserialize)]
 struct RoleCheckResponse {
     permissions: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct PolicyPayload {
-    app_name: String,
-    role_id: i32,
-    default_ro: String,
-    default_rw: String,
-    tcp_bind: String,
-    tcp_connect: String,
-    allowed_ips: String,
-    allowed_domains: String,
 }
 
 impl From<RuleSet> for AppPolicy {
@@ -141,11 +129,11 @@ fn get_credentials() -> Result<(String, User)> {
 // Server communication
 // ----------------------------------------------------------------------------
 
-pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str) -> Result<()> {
+pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str, _user: &User) -> Result<()> {
     let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3005".into());
     let client = Client::new();
-
-    // 🔎 Step 1: Check if user has "manage_policies"
+    
+    // 🔎 Step 1: Check if user has "manage_policies" - this will use the RoleCheckResponse
     let roles_url = format!("{}/auth/roles", base_url);
     let res = client
         .get(&roles_url)
@@ -161,23 +149,56 @@ pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str) -> Re
         .json()
         .context("Failed to parse roles response")?;
 
-    if !roles_info.permissions.contains(&"manage_policies".to_string()) {
-        println!("User does not have 'manage_policies' permission. Skipping policy update.");
-        return Ok(());
+    let can_manage_policies = roles_info.permissions.contains(&"manage_policies".to_string());
+    if !can_manage_policies {
+        return Err(anyhow!("User does not have policy management permissions"));
     }
 
-    // Step 2: Send the policy update
-    let update_url = format!("{}/auth/ruleset/update", base_url);
+    // Create separate arrays for allowed paths as shown in the curl example
+    let ro_paths_vec: Vec<String> = policy.ro_paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    
+    let rw_paths_vec: Vec<String> = policy.rw_paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
 
-    let payload = PolicyPayload {
+    // Update the URL to match the API endpoint
+    let update_url = format!("{}/policy/request", base_url);
+
+    // Since we don't have role_id in User struct directly, we'll use 1 for admin users
+    // We could check if the user has admin privileges but we've already verified "manage_policies"
+    let role_id = 1; // Admin role
+
+    #[derive(Serialize)]
+    struct PolicyRequestPayload {
+        app_name: String,
+        role_id: i32,
+        default_ro: String,
+        default_rw: String,
+        tcp_bind: String,
+        tcp_connect: String,
+        allowed_ips: String,
+        allowed_domains: String,
+        allowed_ro_paths: Vec<String>,
+        allowed_rw_paths: Vec<String>,
+        change_justification: String,
+    }
+
+    let payload = PolicyRequestPayload {
         app_name: app.to_string(),
-        role_id: 1, // You may keep it static or decode from JWT if needed
+        role_id,
         default_ro: AppPolicy::join_paths(&policy.ro_paths),
         default_rw: AppPolicy::join_paths(&policy.rw_paths),
         tcp_bind: AppPolicy::join_ports(&policy.tcp_bind),
         tcp_connect: AppPolicy::join_ports(&policy.tcp_connect),
         allowed_ips: AppPolicy::join_ips(&policy.allowed_ips),
         allowed_domains: AppPolicy::join_domains(&policy.allowed_domains),
+        allowed_ro_paths: ro_paths_vec,
+        allowed_rw_paths: rw_paths_vec,
+        change_justification: "Automatically updated from sandboxer after access denial".to_string(),
     };
 
     let res = client
@@ -185,13 +206,17 @@ pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str) -> Re
         .bearer_auth(token)
         .json(&payload)
         .send()
-        .context("Failed to send policy update")?;
+        .context("Failed to send policy update request")?;
 
-    if !res.status().is_success() {
-        return Err(anyhow!("Policy update failed: {}", res.status()));
+    // Check status before consuming the response with text()
+    let status = res.status();
+    if !status.is_success() {
+        let error_text = res.text().unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(anyhow!("Policy update request failed: {} - {}", status, error_text));
     }
 
-    println!("Policy update successfully posted to server!");
+    println!("Policy update request successfully submitted!");
+    println!("Note: Changes require admin approval before they take effect.");
     Ok(())
 }
 
@@ -586,6 +611,7 @@ fn main() -> Result<()> {
     let ruleset = RuleSet::fetch_for_app(app, &token)
         .context("Failed to fetch policy from server")?;
     let mut policy = AppPolicy::from(ruleset);
+    let original_policy = policy.clone();
 
     // First run
     let (status, tempdir) = run_strace(app_path, app_args, &policy, "sandbox_log")?;
@@ -608,22 +634,24 @@ fn main() -> Result<()> {
     if !status.success() || !denials.is_empty() {
         if user.has_permission("manage_policies") {
             let updated = process_denials(denials.clone(), &mut policy)?;
+            // In the main() function where we call update_policy_on_server:
             if updated {
-                update_policy_on_server(app, &policy, &token)
+                update_policy_on_server(app, &policy, &token, &user)
                     .context("Failed to upload updated policy")?;
-        
+            
+                println!("Your policy update request has been submitted and is pending approval.");
+                println!("Until approved, the current policy remains in effect.");
+            
                 let rerun = dialoguer::Confirm::new()
-                    .with_prompt("Rerun with updated policy?")
+                    .with_prompt("Would you like to rerun the application with the current (approved) policy?")
                     .default(true)
                     .interact()
                     .unwrap_or(false);
-        
+            
                 if rerun {
-                    let (_rerun_status, _rerun_temp) = run_strace(app_path, app_args, &policy, "rerun_log")?;
-                    println!("Second run completed.");
+                    let (_status, _temp) = run_strace(app_path, app_args, &original_policy, "rerun_log")?;
+                    println!("Application rerun completed using the approved policy.");
                 }
-            } else {
-                println!("No changes to apply.");
             }
         }        
         else {
