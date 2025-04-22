@@ -235,7 +235,7 @@ fn get_credentials() -> Result<Credentials> {
 // ----------------------------------------------------------------------------
 
 fn verify_user_permissions(token: &str) -> Result<HashSet<String>> {
-    let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3005".into());
+    let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "https://127.0.0.1:8443".into());
     let client = Client::new();
 
     // Check user's role permissions
