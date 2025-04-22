@@ -1,21 +1,22 @@
 use anyhow::{anyhow, Context, Result};
 use dialoguer::{Input, Select};
 use landlock::{
-    Access, AccessFs, AccessNet, ABI, NetPort, PathBeneath, PathFd, Ruleset, RulesetAttr,
-    RulesetCreatedAttr,
+    Access, AccessFs, AccessNet, NetPort, PathBeneath, PathFd, Ruleset, RulesetAttr,
+    RulesetCreatedAttr, ABI,
 };
 use regex::Regex;
 use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use tempfile::TempDir;
 use supernanny_sandboxer::policy_client::RuleSet;
-use supernanny_sandboxer::policy_client::{User, log_denial_event};
-use serde::{Deserialize, Serialize};
+use supernanny_sandboxer::policy_client::{log_denial_event, User};
+use tempfile::TempDir;
+use zeroize::Zeroize;
 
 // ----------------------------------------------------------------------------
 // Constants for limiting policy expansion
@@ -47,6 +48,21 @@ struct RoleCheckResponse {
     permissions: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct PolicyRequestPayload {
+    app_name: String,
+    role_id: i32,
+    default_ro: String,
+    default_rw: String,
+    tcp_bind: String,
+    tcp_connect: String,
+    allowed_ips: String,
+    allowed_domains: String,
+    allowed_ro_paths: Vec<String>,
+    allowed_rw_paths: Vec<String>,
+    change_justification: String,
+}
+
 impl From<RuleSet> for AppPolicy {
     fn from(rs: RuleSet) -> Self {
         Self {
@@ -66,11 +82,19 @@ impl AppPolicy {
     }
 
     fn join_paths(paths: &HashSet<PathBuf>) -> String {
-        paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join(":")
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(":")
     }
 
     fn join_ports(ports: &HashSet<u16>) -> String {
-        ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(":")
+        ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(":")
     }
 
     fn join_ips(ips: &HashSet<String>) -> String {
@@ -84,56 +108,137 @@ impl AppPolicy {
     // Validate a path is safe to use
     fn validate_path(path: &Path) -> Result<()> {
         // Check path isn't too long
-        if path.to_string_lossy().len() > 4096 {
+        let path_str = path.to_string_lossy();
+        if path_str.len() > 4096 {
             return Err(anyhow!("Path too long: {}", path.display()));
         }
-        
+
         // Check path doesn't contain unusual characters
-        if path.to_string_lossy().contains('\0') {
+        if path_str.contains('\0') {
             return Err(anyhow!("Path contains null bytes: {}", path.display()));
         }
-        
+
+        // Check for path traversal attempts
+        if path_str.contains("..") {
+            return Err(anyhow!(
+                "Path contains potential traversal: {}",
+                path.display()
+            ));
+        }
+
         Ok(())
+    }
+
+    // Create a policy from environment variables (for sandbox mode)
+    fn from_env() -> Result<Self> {
+        Ok(Self {
+            ro_paths: Self::parse_paths_from_env("LL_FS_RO")?,
+            rw_paths: Self::parse_paths_from_env("LL_FS_RW")?,
+            tcp_bind: Self::parse_ports_from_env("LL_TCP_BIND")?,
+            tcp_connect: Self::parse_ports_from_env("LL_TCP_CONNECT")?,
+            allowed_ips: Self::parse_strings_from_env("LL_ALLOWED_IPS")?,
+            allowed_domains: Self::parse_strings_from_env("LL_ALLOWED_DOMAINS")?,
+        })
+    }
+
+    // Helper methods for parsing environment variables
+    fn parse_paths_from_env(var: &str) -> Result<HashSet<PathBuf>> {
+        let mut paths = HashSet::new();
+        if let Ok(value) = env::var(var) {
+            for path_str in value.split(':').filter(|s| !s.is_empty()) {
+                let path = PathBuf::from(path_str);
+                Self::validate_path(&path)?;
+                paths.insert(path);
+            }
+        }
+        Ok(paths)
+    }
+
+    fn parse_ports_from_env(var: &str) -> Result<HashSet<u16>> {
+        let mut ports = HashSet::new();
+        if let Ok(value) = env::var(var) {
+            for port_str in value.split(':').filter(|s| !s.is_empty()) {
+                match port_str.parse::<u16>() {
+                    Ok(port) => {
+                        ports.insert(port);
+                    }
+                    Err(e) => {
+                        return Err(anyhow!("Invalid port in {}: {} - {}", var, port_str, e));
+                    }
+                }
+            }
+        }
+        Ok(ports)
+    }
+
+    fn parse_strings_from_env(var: &str) -> Result<HashSet<String>> {
+        let mut strings = HashSet::new();
+        if let Ok(value) = env::var(var) {
+            for s in value.split(':').filter(|s| !s.is_empty()) {
+                strings.insert(s.to_string());
+            }
+        }
+        Ok(strings)
     }
 }
 
 // ----------------------------------------------------------------------------
-// Auth: just token
+// Auth: Enhanced with zeroize for secure password handling
 // ----------------------------------------------------------------------------
 
-fn get_credentials() -> Result<(String, User)> {
+#[derive(Debug)]
+struct Credentials {
+    username: String,
+    token: String,
+    _user: User,
+}
+
+impl Credentials {
+    fn new(username: String, token: String, user: User) -> Self {
+        Self {
+            username,
+            token,
+            _user: user,
+        }
+    }
+}
+
+fn get_credentials() -> Result<Credentials> {
     let username = Input::<String>::new()
         .with_prompt("Username")
         .interact_text()
         .context("Failed to read username")?;
-    
+
     let mut password = dialoguer::Password::new()
         .with_prompt("Password")
         .interact()
         .context("Failed to read password")?;
 
     // Get the result before clearing password
-    let result = RuleSet::login(&username, &password);
-    
-    // Clear password from memory as soon as possible
-    let password_bytes = unsafe { password.as_bytes_mut() };
-    for byte in password_bytes {
-        *byte = 0;
-    }
-    drop(password);
-    
-    result.context("Authentication failed")
+    let (token, user) = match RuleSet::login(&username, &password) {
+        Ok((tok, usr)) => (tok, usr),
+        Err(e) => {
+            // Ensure password is cleared even on error
+            password.zeroize();
+            return Err(anyhow!("Authentication failed: {}", e));
+        }
+    };
+
+    // Clear password from memory
+    password.zeroize();
+
+    Ok(Credentials::new(username, token, user))
 }
 
 // ----------------------------------------------------------------------------
 // Server communication
 // ----------------------------------------------------------------------------
 
-pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str, _user: &User) -> Result<()> {
+fn verify_user_permissions(token: &str) -> Result<HashSet<String>> {
     let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3005".into());
     let client = Client::new();
-    
-    // 🔎 Step 1: Check if user has "manage_policies" - this will use the RoleCheckResponse
+
+    // Check user's role permissions
     let roles_url = format!("{}/auth/roles", base_url);
     let res = client
         .get(&roles_url)
@@ -142,25 +247,40 @@ pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str, _user
         .context("Failed to fetch user permissions")?;
 
     if !res.status().is_success() {
-        return Err(anyhow!("Could not verify user permissions: {}", res.status()));
+        return Err(anyhow!(
+            "Could not verify user permissions: {}",
+            res.status()
+        ));
     }
 
-    let roles_info: RoleCheckResponse = res
-        .json()
-        .context("Failed to parse roles response")?;
+    let roles_info: RoleCheckResponse = res.json().context("Failed to parse roles response")?;
 
-    let can_manage_policies = roles_info.permissions.contains(&"manage_policies".to_string());
-    if !can_manage_policies {
+    Ok(roles_info.permissions.into_iter().collect())
+}
+
+fn update_policy_on_server(
+    app: &str,
+    policy: &AppPolicy,
+    token: &str,
+    permissions: &HashSet<String>,
+) -> Result<()> {
+    // First check permissions
+    if !permissions.contains("manage_policies") {
         return Err(anyhow!("User does not have policy management permissions"));
     }
 
-    // Create separate arrays for allowed paths as shown in the curl example
-    let ro_paths_vec: Vec<String> = policy.ro_paths
+    let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3005".into());
+    let client = Client::new();
+
+    // Create separate arrays for allowed paths
+    let ro_paths_vec: Vec<String> = policy
+        .ro_paths
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    
-    let rw_paths_vec: Vec<String> = policy.rw_paths
+
+    let rw_paths_vec: Vec<String> = policy
+        .rw_paths
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
@@ -168,24 +288,9 @@ pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str, _user
     // Update the URL to match the API endpoint
     let update_url = format!("{}/policy/request", base_url);
 
-    // Since we don't have role_id in User struct directly, we'll use 1 for admin users
-    // We could check if the user has admin privileges but we've already verified "manage_policies"
-    let role_id = 1; // Admin role
-
-    #[derive(Serialize)]
-    struct PolicyRequestPayload {
-        app_name: String,
-        role_id: i32,
-        default_ro: String,
-        default_rw: String,
-        tcp_bind: String,
-        tcp_connect: String,
-        allowed_ips: String,
-        allowed_domains: String,
-        allowed_ro_paths: Vec<String>,
-        allowed_rw_paths: Vec<String>,
-        change_justification: String,
-    }
+    // For the role_id, we use 1 for admin users with manage_policies permission
+    // A more sophisticated approach would extract the role_id from the user object
+    let role_id = 1;
 
     let payload = PolicyRequestPayload {
         app_name: app.to_string(),
@@ -198,7 +303,8 @@ pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str, _user
         allowed_domains: AppPolicy::join_domains(&policy.allowed_domains),
         allowed_ro_paths: ro_paths_vec,
         allowed_rw_paths: rw_paths_vec,
-        change_justification: "Automatically updated from sandboxer after access denial".to_string(),
+        change_justification: "Automatically updated from sandboxer after access denial"
+            .to_string(),
     };
 
     let res = client
@@ -212,7 +318,11 @@ pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str, _user
     let status = res.status();
     if !status.is_success() {
         let error_text = res.text().unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(anyhow!("Policy update request failed: {} - {}", status, error_text));
+        return Err(anyhow!(
+            "Policy update request failed: {} - {}",
+            status,
+            error_text
+        ));
     }
 
     println!("Policy update request successfully submitted!");
@@ -226,147 +336,230 @@ pub fn update_policy_on_server(app: &str, policy: &AppPolicy, token: &str, _user
 
 fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
     let abi = ABI::V5;
+
+    // Create the base ruleset with all necessary access types
     let base = Ruleset::default()
-        .handle_access(AccessFs::from_all(abi))?
-        .handle_access(AccessNet::BindTcp)?
-        .handle_access(AccessNet::ConnectTcp)?;
-    
+        .handle_access(AccessFs::from_all(abi))
+        .context("Failed to handle filesystem access")?
+        .handle_access(AccessNet::BindTcp)
+        .context("Failed to handle TCP bind access")?
+        .handle_access(AccessNet::ConnectTcp)
+        .context("Failed to handle TCP connect access")?;
+
     let mut created = base.create().context("Failed to create Landlock ruleset")?;
-    
-    // Process read-only paths
+
+    // Process read-only paths with improved error handling
     for path in &policy.ro_paths {
         if let Err(e) = AppPolicy::validate_path(path) {
             eprintln!("Warning: Skipping invalid read-only path: {}", e);
             continue;
         }
-        
-        let canonical_path = match fs::canonicalize(path) {
-            Ok(p) => p,
+
+        match fs::canonicalize(path) {
+            Ok(canonical_path) => {
+                if let Ok(fd) = PathFd::new(canonical_path.as_os_str()) {
+                    let rule = PathBeneath::new(fd, AccessFs::from_read(abi));
+                    
+                    // Important: Store the result in a temporary variable first
+                    let result = created.add_rule(rule);
+                    
+                    // Then handle the result without using created again until reassigned
+                    match result {
+                        Ok(new_created) => created = new_created,
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to add read-only rule for {}: {}",
+                                path.display(),
+                                e
+                            );
+                            // We need to break here because created has been consumed
+                            return Err(anyhow!("Failed to add ruleset rule: {}", e));
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "Warning: Failed to open path {}",
+                        canonical_path.display()
+                    );
+                }
+            },
             Err(e) => {
-                eprintln!("Warning: Failed to canonicalize path {}: {}", path.display(), e);
-                continue;
+                eprintln!(
+                    "Warning: Failed to canonicalize path {}: {}",
+                    path.display(),
+                    e
+                );
             }
-        };
-        
-        let fd = match PathFd::new(canonical_path.as_os_str()) {
-            Ok(fd) => fd,
-            Err(e) => {
-                eprintln!("Warning: Failed to open path {}: {}", canonical_path.display(), e);
-                continue;
-            }
-        };
-        
-        let rule = PathBeneath::new(fd, AccessFs::from_read(abi));
-        created = created.add_rule(rule)
-            .map_err(|e| {
-                eprintln!("Warning: Failed to add read-only rule for {}: {}", path.display(), e);
-                e
-            })?;
+        }
     }
-    
-    // Process read-write paths
+
+    // Apply the same pattern for read-write paths
     for path in &policy.rw_paths {
         if let Err(e) = AppPolicy::validate_path(path) {
             eprintln!("Warning: Skipping invalid read-write path: {}", e);
             continue;
         }
-        
-        let canonical_path = match fs::canonicalize(path) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Warning: Failed to canonicalize path {}: {}", path.display(), e);
-                continue;
+
+        if let Ok(canonical_path) = fs::canonicalize(path) {
+            if let Ok(fd) = PathFd::new(canonical_path.as_os_str()) {
+                let rule = PathBeneath::new(fd, AccessFs::from_all(abi));
+                
+                // Store result first
+                let result = created.add_rule(rule);
+                
+                // Handle result safely
+                match result {
+                    Ok(new_created) => created = new_created,
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to add read-write rule for {}: {}",
+                            path.display(),
+                            e
+                        );
+                        return Err(anyhow!("Failed to add ruleset rule: {}", e));
+                    }
+                }
+            } else {
+                eprintln!(
+                    "Warning: Failed to open path {}",
+                    canonical_path.display()
+                );
             }
-        };
-        
-        let fd = match PathFd::new(canonical_path.as_os_str()) {
-            Ok(fd) => fd,
-            Err(e) => {
-                eprintln!("Warning: Failed to open path {}: {}", canonical_path.display(), e);
-                continue;
-            }
-        };
-        
-        let rule = PathBeneath::new(fd, AccessFs::from_all(abi));
-        created = created.add_rule(rule)
-            .map_err(|e| {
-                eprintln!("Warning: Failed to add read-write rule for {}: {}", path.display(), e);
-                e
-            })?;
+        } else {
+            eprintln!(
+                "Warning: Failed to canonicalize path {}",
+                path.display()
+            );
+        }
     }
-    
-    // Process TCP bind ports
+
+    // TCP bind ports
     for port in &policy.tcp_bind {
         let rule = NetPort::new(*port, AccessNet::BindTcp);
-        created = created.add_rule(rule)
-            .map_err(|e| {
-                eprintln!("Warning: Failed to add TCP bind rule for port {}: {}", port, e);
-                e
-            })?;
+        
+        // Store result first
+        let result = created.add_rule(rule);
+        
+        // Handle result safely
+        match result {
+            Ok(new_created) => created = new_created,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to add TCP bind rule for port {}: {}",
+                    port, e
+                );
+                return Err(anyhow!("Failed to add TCP bind rule: {}", e));
+            }
+        }
     }
-    
-    // Process TCP connect ports
+
+    // TCP connect ports
     for port in &policy.tcp_connect {
         let rule = NetPort::new(*port, AccessNet::ConnectTcp);
-        created = created.add_rule(rule)
-            .map_err(|e| {
-                eprintln!("Warning: Failed to add TCP connect rule for port {}: {}", port, e);
-                e
-            })?;
+        
+        // Store result first
+        let result = created.add_rule(rule);
+        
+        // Handle result safely
+        match result {
+            Ok(new_created) => created = new_created,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to add TCP connect rule for port {}: {}",
+                    port, e
+                );
+                return Err(anyhow!("Failed to add TCP connect rule: {}", e));
+            }
+        }
     }
-    
-    created.restrict_self()?;
+
+    // Apply the ruleset
+    created
+        .restrict_self()
+        .context("Failed to restrict process with Landlock rules")?;
+
     Ok(())
 }
-
 
 // ----------------------------------------------------------------------------
 // Strace
 // ----------------------------------------------------------------------------
 
-fn run_strace(app_path: &Path, args: &[String], policy: &AppPolicy, prefix: &str) -> Result<(ExitStatus, TempDir)> {
+fn run_strace(
+    app_path: &Path,
+    args: &[String],
+    policy: &AppPolicy,
+    prefix: &str,
+) -> Result<(ExitStatus, TempDir)> {
     // Validate app path
     if let Err(e) = AppPolicy::validate_path(app_path) {
         return Err(anyhow!("Invalid application path: {}", e));
     }
 
-    let tempdir = TempDir::new()?;
+    let tempdir = TempDir::new().context("Failed to create temporary directory")?;
     let log_prefix = tempdir.path().join(prefix);
     let log_path = log_prefix.to_string_lossy().to_string();
 
     let mut envs: Vec<(String, String)> = env::vars().collect();
     envs.push(("LL_FS_RO".into(), AppPolicy::join_paths(&policy.ro_paths)));
     envs.push(("LL_FS_RW".into(), AppPolicy::join_paths(&policy.rw_paths)));
-    envs.push(("LL_TCP_BIND".into(), AppPolicy::join_ports(&policy.tcp_bind)));
-    envs.push(("LL_TCP_CONNECT".into(), AppPolicy::join_ports(&policy.tcp_connect)));
-    envs.push(("LL_ALLOWED_IPS".into(), AppPolicy::join_ips(&policy.allowed_ips)));
-    envs.push(("LL_ALLOWED_DOMAINS".into(), AppPolicy::join_domains(&policy.allowed_domains)));
+    envs.push((
+        "LL_TCP_BIND".into(),
+        AppPolicy::join_ports(&policy.tcp_bind),
+    ));
+    envs.push((
+        "LL_TCP_CONNECT".into(),
+        AppPolicy::join_ports(&policy.tcp_connect),
+    ));
+    envs.push((
+        "LL_ALLOWED_IPS".into(),
+        AppPolicy::join_ips(&policy.allowed_ips),
+    ));
+    envs.push((
+        "LL_ALLOWED_DOMAINS".into(),
+        AppPolicy::join_domains(&policy.allowed_domains),
+    ));
 
-    let current_exe = env::current_exe()?;
+    let current_exe = env::current_exe().context("Failed to get current executable path")?;
     let strace_path = env::var("STRACE_PATH").unwrap_or_else(|_| "/usr/bin/strace".to_string());
 
-    let status = Command::new(strace_path)
-        .args(&["-ff", "-yy", "-e", "trace=file,process,openat,getdents,stat,connect,socket,bind"])
-        .arg("-o").arg(&log_path)
+    let status = Command::new(&strace_path)
+        .args(&[
+            "-ff",
+            "-yy",
+            "-e",
+            "trace=file,process,openat,getdents,stat,connect,socket,bind",
+        ])
+        .arg("-o")
+        .arg(&log_path)
         .arg(&current_exe)
         .arg("--sandbox")
         .arg(app_path)
         .args(args)
         .env_clear()
         .envs(envs)
-        .status()?;
+        .status()
+        .with_context(|| format!("Failed to execute strace at {}", strace_path))?;
 
     Ok((status, tempdir))
 }
 
 fn parse_denied_lines(dir: &Path, prefix: &str) -> Result<HashSet<String>> {
-    let path_re = Regex::new(r#"openat\(.*?,\s*"([^"]+)"|stat\("([^"]+)"|getdents\(.*?,\s*"([^"]+)""#)?;
-    let net_re = Regex::new(r#"(connect|bind)\(.*?sin_port=htons\((\d+)\)"#)?;
+    // Improved regex patterns for better clarity and parsing
+    let path_re =
+        Regex::new(r#"openat\(.*?,\s*"([^"]+)"|stat\(.*?"([^"]+)"|getdents\(.*?,\s*"([^"]+)""#)
+            .context("Failed to compile path regex")?;
+    let net_re = Regex::new(r#"(connect|bind)\(.*?sin_port=htons\((\d+)\)"#)
+        .context("Failed to compile network regex")?;
+    let ip_re = Regex::new(r#"(connect|bind)\(.*?sin_addr=inet_addr\("([^"]+)"\)"#)
+        .context("Failed to compile IP regex")?;
+    let domain_re =
+        Regex::new(r#"getaddrinfo\(.*?,\s*"([^"]+)"#).context("Failed to compile domain regex")?;
 
     let mut denials = HashSet::new();
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+    for entry in fs::read_dir(dir).context("Failed to read log directory")? {
+        let entry = entry.context("Failed to read directory entry")?;
         if !entry.file_name().to_string_lossy().starts_with(prefix) {
             continue;
         }
@@ -374,7 +567,11 @@ fn parse_denied_lines(dir: &Path, prefix: &str) -> Result<HashSet<String>> {
         let file = match File::open(entry.path()) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Warning: Could not open log file {}: {}", entry.path().display(), e);
+                eprintln!(
+                    "Warning: Could not open log file {}: {}",
+                    entry.path().display(),
+                    e
+                );
                 continue;
             }
         };
@@ -387,35 +584,53 @@ fn parse_denied_lines(dir: &Path, prefix: &str) -> Result<HashSet<String>> {
                     continue;
                 }
             };
-            
+
+            // Only process lines with access denied errors
             if !(line.contains("EACCES") || line.contains("EPERM")) {
                 continue;
             }
 
+            // Match filesystem path denials
             if let Some(cap) = path_re.captures(&line) {
                 if let Some(p) = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3)) {
                     let raw_path = PathBuf::from(p.as_str());
-                
+
                     // Only canonicalize paths if possible, otherwise use the raw path
                     match fs::canonicalize(&raw_path) {
                         Ok(canonical_path) => {
                             denials.insert(canonical_path.to_string_lossy().to_string());
-                        },
+                        }
                         Err(_) => {
                             // If canonicalization fails, use the original path but mark it
                             denials.insert(format!("NONCANONICAL:{}", raw_path.to_string_lossy()));
                         }
                     }
                 }
-                
-            } else if let Some(cap) = net_re.captures(&line) {
+            }
+            // Match network port denials
+            else if let Some(cap) = net_re.captures(&line) {
                 if let (Some(op), Some(port)) = (cap.get(1), cap.get(2)) {
                     // Validate port is a valid number before adding
                     if let Ok(port_num) = port.as_str().parse::<u16>() {
                         denials.insert(format!("tcp:{}:{}", op.as_str(), port_num));
                     } else {
-                        eprintln!("Warning: Invalid port number in denial log: {}", port.as_str());
+                        eprintln!(
+                            "Warning: Invalid port number in denial log: {}",
+                            port.as_str()
+                        );
                     }
+                }
+            }
+            // Match IP address denials
+            else if let Some(cap) = ip_re.captures(&line) {
+                if let Some(ip) = cap.get(2) {
+                    denials.insert(format!("ip:{}", ip.as_str()));
+                }
+            }
+            // Match domain name denials
+            else if let Some(cap) = domain_re.captures(&line) {
+                if let Some(domain) = cap.get(1) {
+                    denials.insert(format!("domain:{}", domain.as_str()));
                 }
             }
         }
@@ -424,16 +639,29 @@ fn parse_denied_lines(dir: &Path, prefix: &str) -> Result<HashSet<String>> {
     Ok(denials)
 }
 
-fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<bool> {
+fn process_denials(
+    denials: HashSet<String>,
+    policy: &mut AppPolicy,
+    permissions: &HashSet<String>,
+) -> Result<bool> {
     let mut updated = false;
+    let can_update = permissions.contains("manage_policies");
+
+    if !can_update {
+        println!("User does not have permission to manage policies. Denials will be logged only.");
+        for denial in &denials {
+            println!("  - Denied: {}", denial);
+        }
+        return Ok(false);
+    }
 
     for entry in denials {
         if entry.starts_with("tcp:") {
-            // Existing TCP port handling with original limits
+            // TCP port handling
             let parts: Vec<&str> = entry.splitn(3, ':').collect();
             if parts.len() >= 3 {
                 let (_, op, port_str) = (parts[0], parts[1], parts[2]);
-                
+
                 let port: u16 = match port_str.parse() {
                     Ok(p) => p,
                     Err(e) => {
@@ -441,7 +669,7 @@ fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<b
                         continue;
                     }
                 };
-                
+
                 let choices = &["Allow", "Deny"];
                 let selection = Select::new()
                     .with_prompt(format!("TCP {} port {} denied. Allow?", op, port))
@@ -452,14 +680,20 @@ fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<b
                 if selection == 0 {
                     if op == "connect" {
                         if policy.tcp_connect.len() >= MAX_TCP_CONNECT_PORTS {
-                            println!("Warning: Maximum TCP connect ports ({}) reached", MAX_TCP_CONNECT_PORTS);
+                            println!(
+                                "Warning: Maximum TCP connect ports ({}) reached",
+                                MAX_TCP_CONNECT_PORTS
+                            );
                             continue;
                         }
                         policy.tcp_connect.insert(port);
                         updated = true;
                     } else if op == "bind" {
                         if policy.tcp_bind.len() >= MAX_TCP_BIND_PORTS {
-                            println!("Warning: Maximum TCP bind ports ({}) reached", MAX_TCP_BIND_PORTS);
+                            println!(
+                                "Warning: Maximum TCP bind ports ({}) reached",
+                                MAX_TCP_BIND_PORTS
+                            );
                             continue;
                         }
                         policy.tcp_bind.insert(port);
@@ -468,14 +702,14 @@ fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<b
                 }
             }
         } else if entry.starts_with("ip:") {
-            // New IP address handling with MAX_IPS
+            // IP address handling
             let ip = entry.strip_prefix("ip:").unwrap_or(&entry);
-            
+
             if policy.allowed_ips.len() >= MAX_IPS {
                 println!("Warning: Maximum allowed IPs ({}) reached", MAX_IPS);
                 continue;
             }
-            
+
             let choices = &["Allow", "Deny"];
             let selection = Select::new()
                 .with_prompt(format!("IP address {} denied. Allow?", ip))
@@ -488,14 +722,14 @@ fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<b
                 updated = true;
             }
         } else if entry.starts_with("domain:") {
-            // New domain handling with MAX_DOMAINS
+            // Domain handling
             let domain = entry.strip_prefix("domain:").unwrap_or(&entry);
-            
+
             if policy.allowed_domains.len() >= MAX_DOMAINS {
                 println!("Warning: Maximum allowed domains ({}) reached", MAX_DOMAINS);
                 continue;
             }
-            
+
             let choices = &["Allow", "Deny"];
             let selection = Select::new()
                 .with_prompt(format!("Domain {} denied. Allow?", domain))
@@ -507,15 +741,15 @@ fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<b
                 policy.allowed_domains.insert(domain.to_string());
                 updated = true;
             }
-        }else {
-            // Handle non-canonical paths specially
+        } else {
+            // Handle paths
             let is_noncanonical = entry.starts_with("NONCANONICAL:");
             let path_str = if is_noncanonical {
                 entry.strip_prefix("NONCANONICAL:").unwrap_or(&entry)
             } else {
                 &entry
             };
-            
+
             let path = PathBuf::from(path_str);
 
             // Validate the path
@@ -529,7 +763,11 @@ fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<b
                 match fs::canonicalize(&path) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!("Warning: Still unable to canonicalize path {}: {}", path.display(), e);
+                        eprintln!(
+                            "Warning: Still unable to canonicalize path {}: {}",
+                            path.display(),
+                            e
+                        );
                         // Skip paths we can't canonicalize for safety
                         continue;
                     }
@@ -541,36 +779,44 @@ fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<b
             if policy.contains_path(&canonical_path) {
                 continue;
             }
-            
+
             let choices = &["Read-Only", "Read-Write", "Deny"];
             let selection = Select::new()
-                .with_prompt(format!("Denied path: {}. Allow as?", canonical_path.display()))
+                .with_prompt(format!(
+                    "Denied path: {}. Allow as?",
+                    canonical_path.display()
+                ))
                 .items(choices)
                 .default(2)
                 .interact()?;
-            
+
             match selection {
                 0 => {
                     // Check limits before adding
                     if policy.ro_paths.len() >= MAX_RO_PATHS {
-                        println!("Warning: Maximum number of read-only paths ({}) reached.", MAX_RO_PATHS);
+                        println!(
+                            "Warning: Maximum number of read-only paths ({}) reached.",
+                            MAX_RO_PATHS
+                        );
                         continue;
                     }
                     policy.ro_paths.insert(canonical_path);
                     updated = true;
-                },
+                }
                 1 => {
                     // Check limits before adding
                     if policy.rw_paths.len() >= MAX_RW_PATHS {
-                        println!("Warning: Maximum number of read-write paths ({}) reached.", MAX_RW_PATHS);
+                        println!(
+                            "Warning: Maximum number of read-write paths ({}) reached.",
+                            MAX_RW_PATHS
+                        );
                         continue;
                     }
                     policy.rw_paths.insert(canonical_path);
                     updated = true;
-                },
+                }
                 _ => {}
             };
-            
         }
     }
 
@@ -578,7 +824,7 @@ fn process_denials(denials: HashSet<String>, policy: &mut AppPolicy) -> Result<b
 }
 
 // ----------------------------------------------------------------------------
-// Entrypoint
+// Main entrypoint
 // ----------------------------------------------------------------------------
 
 fn main() -> Result<()> {
@@ -589,15 +835,12 @@ fn main() -> Result<()> {
         return run_sandbox();
     }
 
-    // Authenticate and get token + user object
-    let (token, user) = get_credentials().context("Failed to authenticate user")?;
-    println!("Authentication successful!");
-
     // Validate command line usage
     if args.len() < 2 {
         return Err(anyhow!("Usage: {} <APP> [ARGS...]", args[0]));
     }
 
+    // Get app path and args
     let app = &args[1];
     let app_args = &args[2..];
 
@@ -607,66 +850,103 @@ fn main() -> Result<()> {
         return Err(anyhow!("Invalid application path: {}", e));
     }
 
+    // Authenticate user
+    let credentials = get_credentials().context("Failed to authenticate user")?;
+    println!("Authentication successful! User: {}", credentials.username);
+
+    // Verify user permissions
+    let permissions =
+        verify_user_permissions(&credentials.token).context("Failed to verify user permissions")?;
+
     // Retrieve policy from server
-    let ruleset = RuleSet::fetch_for_app(app, &token)
+    let ruleset = RuleSet::fetch_for_app(app, &credentials.token)
         .context("Failed to fetch policy from server")?;
     let mut policy = AppPolicy::from(ruleset);
     let original_policy = policy.clone();
 
-    // First run
-    let (status, tempdir) = run_strace(app_path, app_args, &policy, "sandbox_log")?;
-    let denials = parse_denied_lines(tempdir.path(), "sandbox_log")?;
+    // First run with strace to capture denials
+    println!("Running application with current policy...");
+    let (status, tempdir) = run_strace(app_path, app_args, &policy, "sandbox_log")
+        .context("Failed to run application with strace")?;
+
+    // Parse denial logs
+    let denials =
+        parse_denied_lines(tempdir.path(), "sandbox_log").context("Failed to parse denial logs")?;
 
     // Log denials if any
     if !denials.is_empty() {
+        println!("Detected {} access denials", denials.len());
+
         for denial in &denials {
-            let resource_type = if denial.starts_with("tcp:") {
+            let resource_type = if denial.starts_with("tcp:")
+                || denial.starts_with("ip:")
+                || denial.starts_with("domain:")
+            {
                 "network"
             } else {
                 "filesystem"
             };
 
-            let _ = log_denial_event(app, denial, resource_type, &token);
-        }
-    }
+            if let Err(e) = log_denial_event(app, denial, resource_type, &credentials.token) {
+                eprintln!("Warning: Failed to log denial event: {}", e);
+            }
+            // Process denials and update policy if user has permission
+            let updated = process_denials(denials.clone(), &mut policy, &permissions)?;
 
-    // Check if rerun is needed
-    if !status.success() || !denials.is_empty() {
-        if user.has_permission("manage_policies") {
-            let updated = process_denials(denials.clone(), &mut policy)?;
-            // In the main() function where we call update_policy_on_server:
+            // Update policy on server if changes were made
             if updated {
-                update_policy_on_server(app, &policy, &token, &user)
-                    .context("Failed to upload updated policy")?;
-            
-                println!("Your policy update request has been submitted and is pending approval.");
-                println!("Until approved, the current policy remains in effect.");
-            
+                match update_policy_on_server(app, &policy, &credentials.token, &permissions) {
+                    Ok(_) => {
+                        println!("Your policy update request has been submitted and is pending approval.");
+                        println!("Until approved, the current policy remains in effect.");
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to upload policy update: {}", e);
+                        println!(
+                            "Policy was updated locally but changes were not saved on the server."
+                        );
+                    }
+                }
+
+                // Offer to rerun with current (approved) policy
                 let rerun = dialoguer::Confirm::new()
                     .with_prompt("Would you like to rerun the application with the current (approved) policy?")
                     .default(true)
                     .interact()
                     .unwrap_or(false);
-            
+
                 if rerun {
-                    let (_status, _temp) = run_strace(app_path, app_args, &original_policy, "rerun_log")?;
-                    println!("Application rerun completed using the approved policy.");
+                    println!("Rerunning application with approved policy...");
+                    match run_strace(app_path, app_args, &original_policy, "rerun_log") {
+                        Ok((status, _)) => {
+                            println!(
+                                "Application rerun completed with exit code: {}",
+                                status.code().unwrap_or(-1)
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("Error during rerun: {}", e);
+                        }
+                    }
                 }
             }
-        }        
-        else {
-            println!("Access denied events have been logged. Contact an admin if access is needed.");
-            for denial in &denials {
-                println!("  - Denied: {}", denial);
-            }
         }
+    } else if !status.success() {
+        println!(
+            "Application exited with code: {}",
+            status.code().unwrap_or(-1)
+        );
+        println!("No access denial events were detected. The issue may be application-specific.");
     } else {
-        println!("App ran successfully with current policy.");
+        println!("Application ran successfully with the current policy.");
     }
 
     Ok(())
 }
 
+// ----------------------------------------------------------------------------
+// Sandbox mode
+// ----------------------------------------------------------------------------
 
 fn run_sandbox() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -676,45 +956,48 @@ fn run_sandbox() -> Result<()> {
 
     let cmd = &args[2];
     let cmd_args = &args[3..];
-    
+
     // Validate command path
     let cmd_path = Path::new(cmd);
     if let Err(e) = AppPolicy::validate_path(cmd_path) {
         return Err(anyhow!("Invalid command path: {}", e));
     }
-    
-    let policy = AppPolicy {
-        ro_paths: env::var("LL_FS_RO").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
-        rw_paths: env::var("LL_FS_RW").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect(),
-        tcp_bind: env::var("LL_TCP_BIND").unwrap_or_default().split(':').filter_map(|s| s.parse().ok()).collect(),
-        tcp_connect: env::var("LL_TCP_CONNECT").unwrap_or_default().split(':').filter_map(|s| s.parse().ok()).collect(),
-        allowed_ips: env::var("LL_ALLOWED_IPS").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(String::from).collect(),
-        allowed_domains: env::var("LL_ALLOWED_DOMAINS").unwrap_or_default().split(':').filter(|s| !s.is_empty()).map(String::from).collect(),
-    };
+
+    // Load policy from environment variables with better error handling
+    let policy =
+        AppPolicy::from_env().context("Failed to load policy from environment variables")?;
 
     // Get token for event logging but remove it from environment
     let token = env::var("LL_AUTH_TOKEN").ok();
     // Remove sensitive env vars so they aren't passed to the sandboxed application
     std::env::remove_var("LL_AUTH_TOKEN");
-    
-    // Apply Landlock restrictions - fail closed for security
+
+    // Apply Landlock restrictions with enhanced error handling
     if let Err(e) = enforce_landlock(&policy) {
         eprintln!("Error: Failed to apply Landlock restrictions: {}", e);
         // Try to log the error if we have a token
         if let Some(token) = &token {
             let _ = log_denial_event(cmd, &format!("landlock_setup_error:{}", e), "system", token);
         }
-        // Fail closed for security
+        // Fail closed for security - refuse to run without protection
         return Err(anyhow!("Cannot run without sandbox protection: {}", e));
     }
-    
-    // Execute the sandboxed command
-    let status = Command::new(cmd).args(cmd_args).status()?;
-    
+
+    // Execute the sandboxed command with enhanced error handling
+    let status = Command::new(cmd)
+        .args(cmd_args)
+        .status()
+        .with_context(|| format!("Failed to execute command: {}", cmd))?;
+
     // If command failed and we have a token, try to log a general failure
     if !status.success() && token.is_some() {
-        let _ = log_denial_event(cmd, &format!("exit_status:{}", status), "application", &token.unwrap());
+        let _ = log_denial_event(
+            cmd,
+            &format!("exit_status:{}", status.code().unwrap_or(-1)),
+            "application",
+            &token.unwrap(),
+        );
     }
-    
+
     std::process::exit(status.code().unwrap_or(1));
 }
