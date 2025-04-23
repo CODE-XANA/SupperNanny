@@ -34,7 +34,7 @@ pub struct AuthSession {
 impl AuthSession {
     pub fn login_and_fetch_roles() -> Result<Self> {
         let server_url = std::env::var("SERVER_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:3005".into());
+            .unwrap_or_else(|_| "https://127.0.0.1:8443".into());
 
         let username: String = Input::new()
             .with_prompt("Username")

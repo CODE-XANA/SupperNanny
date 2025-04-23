@@ -6,7 +6,7 @@ use landlock::{
 };
 use regex::Regex;
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
@@ -46,21 +46,6 @@ pub struct AppPolicy {
 #[derive(Debug, Deserialize)]
 struct RoleCheckResponse {
     permissions: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct PolicyRequestPayload {
-    app_name: String,
-    role_id: i32,
-    default_ro: String,
-    default_rw: String,
-    tcp_bind: String,
-    tcp_connect: String,
-    allowed_ips: String,
-    allowed_domains: String,
-    allowed_ro_paths: Vec<String>,
-    allowed_rw_paths: Vec<String>,
-    change_justification: String,
 }
 
 impl From<RuleSet> for AppPolicy {
@@ -236,9 +221,12 @@ fn get_credentials() -> Result<Credentials> {
 
 fn verify_user_permissions(token: &str) -> Result<HashSet<String>> {
     let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "https://127.0.0.1:8443".into());
-    let client = Client::new();
+    
+    let client = Client::builder()
+        .danger_accept_invalid_certs(true) 
+        .build()
+        .context("Failed to build HTTPS client")?;
 
-    // Check user's role permissions
     let roles_url = format!("{}/auth/roles", base_url);
     let res = client
         .get(&roles_url)
@@ -264,58 +252,57 @@ fn update_policy_on_server(
     token: &str,
     permissions: &HashSet<String>,
 ) -> Result<()> {
-    // First check permissions
     if !permissions.contains("manage_policies") {
         return Err(anyhow!("User does not have policy management permissions"));
     }
 
-    let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:3005".into());
-    let client = Client::new();
-
-    // Create separate arrays for allowed paths
+    let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "https://127.0.0.1:8443".into()); 
+    
+    let client = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("Failed to build HTTPS client")?;
+    
+    // Create vectors from paths
     let ro_paths_vec: Vec<String> = policy
         .ro_paths
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-
+    
     let rw_paths_vec: Vec<String> = policy
         .rw_paths
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
 
-    // Update the URL to match the API endpoint
     let update_url = format!("{}/policy/request", base_url);
-
-    // For the role_id, we use 1 for admin users with manage_policies permission
-    // A more sophisticated approach would extract the role_id from the user object
-    let role_id = 1;
-
-    let payload = PolicyRequestPayload {
-        app_name: app.to_string(),
-        role_id,
-        default_ro: AppPolicy::join_paths(&policy.ro_paths),
-        default_rw: AppPolicy::join_paths(&policy.rw_paths),
-        tcp_bind: AppPolicy::join_ports(&policy.tcp_bind),
-        tcp_connect: AppPolicy::join_ports(&policy.tcp_connect),
-        allowed_ips: AppPolicy::join_ips(&policy.allowed_ips),
-        allowed_domains: AppPolicy::join_domains(&policy.allowed_domains),
-        allowed_ro_paths: ro_paths_vec,
-        allowed_rw_paths: rw_paths_vec,
-        change_justification: "Automatically updated from sandboxer after access denial"
-            .to_string(),
-    };
-
+    
+    let payload = serde_json::json!({
+        "app_name": app.to_string(),
+        "role_id": 1,
+        "default_ro": AppPolicy::join_paths(&policy.ro_paths),
+        "default_rw": AppPolicy::join_paths(&policy.rw_paths),
+        "tcp_bind": AppPolicy::join_ports(&policy.tcp_bind),
+        "tcp_connect": AppPolicy::join_ports(&policy.tcp_connect),
+        "allowed_ips": AppPolicy::join_ips(&policy.allowed_ips),
+        "allowed_domains": AppPolicy::join_domains(&policy.allowed_domains),
+        "allowed_ro_paths": ro_paths_vec,
+        "allowed_rw_paths": rw_paths_vec,
+        "change_justification": "Automatically updated from sandboxer after access denial"
+    });
+    
     let res = client
         .post(&update_url)
-        .bearer_auth(token)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
         .json(&payload)
         .send()
         .context("Failed to send policy update request")?;
-
-    // Check status before consuming the response with text()
+    
     let status = res.status();
+    
     if !status.is_success() {
         let error_text = res.text().unwrap_or_else(|_| "Unknown error".to_string());
         return Err(anyhow!(

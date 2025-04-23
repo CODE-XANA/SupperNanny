@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
@@ -54,13 +54,22 @@ impl User {
         self.permissions.iter().any(|p| p == permission)
     }
 }
+
+// Helper function to create a consistent HTTPS client
+fn create_https_client() -> Result<Client> {
+    ClientBuilder::new()
+        .danger_accept_invalid_certs(true) // Remove in production with valid certs
+        .build()
+        .context("Failed to build HTTPS client")
+}
+
 impl RuleSet {
     pub fn fetch_for_app(app: &str, token: &str) -> Result<Self> {
         let base_url = env::var("SERVER_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:3005".to_string());
+            .unwrap_or_else(|_| "https://127.0.0.1:8443".to_string());
         let url = format!("{}/auth/ruleset?app_name={}", base_url, app);
 
-        let client = Client::new();
+        let client = create_https_client()?;
         let res = client
             .get(&url)
             .bearer_auth(token)
@@ -139,10 +148,10 @@ impl RuleSet {
 
     pub fn upload(app: &str, ruleset_raw: &RuleSetRaw, token: &str) -> Result<()> {
         let base_url = env::var("SERVER_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:3005".to_string());
+            .unwrap_or_else(|_| "https://127.0.0.1:8443".to_string());
         let url = format!("{}/auth/ruleset?app_name={}", base_url, app);
 
-        let client = Client::new();
+        let client = create_https_client()?;
         let res = client
             .post(&url)
             .bearer_auth(token)
@@ -159,10 +168,10 @@ impl RuleSet {
 
     pub fn login(username: &str, password: &str) -> Result<(String, User)> {
         let base_url = env::var("SERVER_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:3005".to_string());
+            .unwrap_or_else(|_| "https://127.0.0.1:8443".to_string());
         let login_url = format!("{}/auth/login", base_url);
     
-        let client = Client::new();
+        let client = create_https_client()?;
         let login_request = LoginRequest {
             username: username.to_string(),
             password: password.to_string(),
@@ -247,15 +256,15 @@ pub fn log_denial_event(
     token: &str,
 ) -> Result<()> {
     let base_url = env::var("SERVER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:3005".to_string());
-    let url = format!("{}/events/log", base_url); // ✅ fixed route
+        .unwrap_or_else(|_| "https://127.0.0.1:8443".to_string());
+    let url = format!("{}/events/log", base_url);
 
     let hostname = hostname::get()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
 
-    let client = Client::new();
+    let client = create_https_client()?;
     let event = serde_json::json!({
         "hostname": hostname,
         "app_name": app_name,
