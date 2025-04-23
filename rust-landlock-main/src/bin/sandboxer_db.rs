@@ -277,8 +277,41 @@ fn update_policy_on_server(
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
 
-    let update_url = format!("{}/policy/request", base_url);
+    // First attempt to check if there's an existing pending request
+    let check_url = format!("{}/policy/pending-requests", base_url);
     
+    let res = client
+        .get(&check_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .context("Failed to check for pending policy requests")?;
+    
+    let status = res.status();
+    
+    // If we can successfully retrieve pending requests
+    let mut existing_request_id = None;
+    if status.is_success() {
+        let pending_requests: serde_json::Value = res.json()
+            .context("Failed to parse pending requests response")?;
+        
+        // Check if there's already a pending request for this app and role
+        if let Some(requests) = pending_requests.as_array() {
+            for request in requests {
+                if let (Some(req_app), Some(req_role)) = (
+                    request.get("app_name").and_then(|v| v.as_str()),
+                    request.get("role_id").and_then(|v| v.as_i64()),
+                ) {
+                    if req_app == app && req_role == 1 {
+                        // Found an existing request
+                        existing_request_id = request.get("id").and_then(|v| v.as_i64());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Prepare the policy update payload
     let payload = serde_json::json!({
         "app_name": app.to_string(),
         "role_id": 1,
@@ -292,19 +325,71 @@ fn update_policy_on_server(
         "allowed_rw_paths": rw_paths_vec,
         "change_justification": "Automatically updated from sandboxer after access denial"
     });
-    
-    let res = client
-        .post(&update_url)
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .context("Failed to send policy update request")?;
+
+    // If we found an existing request, try to update it
+    let res = if let Some(id) = existing_request_id {
+        let update_existing_url = format!("{}/policy/request/{}", base_url, id);
+        client
+            .put(&update_existing_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .context("Failed to update existing policy request")?
+    } else {
+        // Otherwise, create a new request
+        let create_url = format!("{}/policy/request", base_url);
+        client
+            .post(&create_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .context("Failed to send policy update request")?
+    };
     
     let status = res.status();
     
     if !status.is_success() {
         let error_text = res.text().unwrap_or_else(|_| "Unknown error".to_string());
+        
+        // Special handling for duplicate key constraint errors
+        if error_text.contains("idx_unique_pending_requests") &&
+           error_text.contains("existe déjà") {
+            // Fall back to trying to delete the old request and create a new one
+            println!("Detected duplicate request, attempting to delete existing request and create a new one...");
+            
+            // Try to find and delete any existing requests
+            let delete_url = format!("{}/policy/delete-pending/{}/{}", base_url, app, 1);
+            let delete_res = client
+                .delete(&delete_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .send();
+                
+            if let Ok(delete_res) = delete_res {
+                if delete_res.status().is_success() {
+                    println!("Successfully deleted existing pending request.");
+                    
+                    // Now try to create the request again
+                    let create_url = format!("{}/policy/request", base_url);
+                    let retry_res = client
+                        .post(&create_url)
+                        .header("Authorization", format!("Bearer {}", token))
+                        .header("Content-Type", "application/json")
+                        .json(&payload)
+                        .send();
+                        
+                    if let Ok(retry_res) = retry_res {
+                        if retry_res.status().is_success() {
+                            println!("Policy update request successfully submitted!");
+                            println!("Note: Changes require admin approval before they take effect.");
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        
         return Err(anyhow!(
             "Policy update request failed: {} - {}",
             status,

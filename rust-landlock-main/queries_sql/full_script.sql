@@ -135,9 +135,10 @@ CREATE TABLE security_logs (
 
 -- ---------- SEED DATA ------------------------------------
 INSERT INTO roles (role_id, role_name) VALUES
-  (1, 'admin'),
+  (1, 'developer_senior'),
   (2, 'developer'),
   (3, 'user');
+  (4, 'reviewer')
 
 INSERT INTO permissions (permission_id, permission_name) VALUES
   (1, 'manage_policies'),
@@ -149,10 +150,11 @@ INSERT INTO permissions (permission_id, permission_name) VALUES
 INSERT INTO role_permissions (role_id, permission_id) VALUES
   (1, 1), (1, 2), (1, 3), (1, 4), (1, 5),
   (2, 2), (2, 3),
-  (3, 3);
+  (3, 3),
+  (4, 4);
 
 INSERT INTO users (user_id, username, password_hash) VALUES
-  (1, 'admin',     '$2a$12$Gp.L8taKXJqc/N/T40fbyekjONH1PaioOfDcvHkubYVDOurNXRoPi'),
+  (1, 'developer_senior',     '$2a$12$Gp.L8taKXJqc/N/T40fbyekjONH1PaioOfDcvHkubYVDOurNXRoPi'),
   (2, 'developer', '$2a$12$OtLIa4HYtsp3nnbx4zQYjOpID.eohUtJYbf5Vu.tgS/hZZ0XLgEVe'),
   (3, 'regular',   '$2a$12$tfr8QKoe8jy66nlHXOIlMeAHfxn5vj7inaLuBco3eiDmAJJVEDdBy'),
   (4, 'reviewer',  '$2a$12$uSLo1q6uaGrXXdkBRxbTy.ugy1nW7Q2uhXtnZXV9AviPa8kcWGbF.');
