@@ -1,6 +1,9 @@
 use actix_web::{delete, get, post, web, HttpResponse};
 
-use crate::state::AppState;
+use crate::{
+    admin::{Needs, jwt::MANAGE_ROLES},
+    state::AppState,
+};
 use super::db;
 
 #[derive(serde::Deserialize)]
@@ -96,6 +99,7 @@ async fn perms(state: web::Data<AppState>, path: web::Path<i32>) -> HttpResponse
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/roles")
+            .wrap(Needs(MANAGE_ROLES))
             .service(list)
             .service(create)
             .service(remove)

@@ -1,13 +1,16 @@
 use actix_web::{
     cookie::{Cookie, SameSite},
-    post,
+    get, post,
     web::{self, Data, Json},
     HttpResponse,
 };
 use argon2::{password_hash::PasswordHash, Argon2, PasswordVerifier};
 use serde::Deserialize;
 
-use crate::{admin::{db, jwt}, state::AppState};
+use crate::{
+    admin::{db, jwt},
+    state::{AppState, JWT_BLACKLIST},
+};
 
 #[derive(Deserialize)]
 struct LoginBody { username: String, password: String }
@@ -45,4 +48,32 @@ pub async fn login(state: Data<AppState>, body: Json<LoginBody>) -> HttpResponse
     HttpResponse::Ok().cookie(cookie).body("Logged in")
 }
 
-pub fn config(cfg: &mut web::ServiceConfig) { cfg.service(login); }
+#[get("/admin/logout")]
+pub async fn logout(req: actix_web::HttpRequest) -> HttpResponse {
+    // 1) le cookie doit exister
+    let Some(cookie) = req.cookie("admin_token") else {
+        return HttpResponse::Unauthorized().finish();
+    };
+
+    // 2) vérifie le token → récupère jti
+    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET");
+    let claims = match jwt::verify(cookie.value(), &secret) {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::Unauthorized().finish(),
+    };
+
+    // 3) ajoute le jti à la black-list
+    JWT_BLACKLIST.lock().unwrap().insert(claims.jti);
+
+    // 4) renvoie un cookie expiré
+    let expired = Cookie::build("admin_token", "")
+        .http_only(true).secure(false)
+        .same_site(SameSite::Strict)
+        .path("/").max_age(time::Duration::seconds(0)).finish();
+
+    HttpResponse::Ok().cookie(expired).body("Logged out")
+}
+
+pub fn config(cfg: &mut web::ServiceConfig) { 
+    cfg.service(login).service(logout); 
+}

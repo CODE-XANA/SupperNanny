@@ -3,6 +3,7 @@ mod state;
 mod utils;
 mod admin;
 mod services;
+mod middleware;
 
 use actix_cors::Cors;
 use actix_web::{middleware::Logger, web, App, HttpServer};
@@ -13,6 +14,7 @@ use std::env;
 
 use crate::{
     services::{logs, roles, rules, users},
+    middleware::rate_limit::IpLimiter,
     state::AppState,
     utils::logger,
 };
@@ -42,6 +44,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(state.clone()))
+            .wrap(IpLimiter)
             .wrap(Logger::default())
             .wrap(
                 Cors::default()
@@ -50,7 +53,7 @@ async fn main() -> std::io::Result<()> {
                     .max_age(3_600),
             )
             // --- routes publiques ---
-            .configure(admin::config)   // /admin/login
+            .configure(admin::config)   // /admin/login /admin/logout
             .configure(logs::init)      // /logs/alert
 
             // --- routes protégées ---
