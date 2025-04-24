@@ -137,8 +137,8 @@ CREATE TABLE security_logs (
 INSERT INTO roles (role_id, role_name) VALUES
   (1, 'developer_senior'),
   (2, 'developer'),
-  (3, 'user');
-  (4, 'reviewer')
+  (3, 'user'),
+  (4, 'reviewer');
 
 INSERT INTO permissions (permission_id, permission_name) VALUES
   (1, 'manage_policies'),
