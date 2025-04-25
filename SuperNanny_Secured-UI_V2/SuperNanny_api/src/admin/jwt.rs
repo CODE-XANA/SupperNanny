@@ -11,11 +11,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{
-    state::{self, JWT_BLACKLIST, random_bytes},
-};
+use crate::state::{JWT_BLACKLIST, random_bytes};
 
-/// Permissions…
+/// Permissions
 pub const MANAGE_RULES:  &str = "manage_rules";
 pub const MANAGE_ROLES:  &str = "manage_roles";
 pub const MANAGE_USERS:  &str = "manage_users";
@@ -23,13 +21,13 @@ pub const VIEW_EVENTS:   &str = "view_events";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AdminClaims {
-    sub:   i32,           // user_admin_id
-    perms: Vec<String>,
-    exp:   usize,
-    pub jti:   String,        // identifiant unique du jeton
+    sub:     i32,
+    perms:   Vec<String>,
+    exp:     usize,
+    pub jti: String, 
 }
 
-/// Génère un JWT HS256 avec jti + TTL.
+/// Génère un JWT HS256 avec jti + TTL
 pub fn sign(admin_id: i32, perms: Vec<String>, secret: &str, ttl_min: i64) -> String {
     let now = Utc::now();
     let exp = (now + Duration::minutes(ttl_min)).timestamp() as usize;
@@ -40,14 +38,14 @@ pub fn sign(admin_id: i32, perms: Vec<String>, secret: &str, ttl_min: i64) -> St
         .expect("jwt encode")
 }
 
-/// Retourne les claims SI le token est valide ET non blacklisté.
+/// Retourne les claims SI le token est valide ET non blacklisté
 pub fn verify(token: &str, secret: &str) -> Result<AdminClaims, jsonwebtoken::errors::Error> {
     let data = decode::<AdminClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::new(Algorithm::HS256),
     )?;
-    // black-list ?
+    // black-list
     if JWT_BLACKLIST.lock().unwrap().contains(&data.claims.jti) {
         return Err(jsonwebtoken::errors::Error::from(
             jsonwebtoken::errors::ErrorKind::InvalidToken,
@@ -57,10 +55,10 @@ pub fn verify(token: &str, secret: &str) -> Result<AdminClaims, jsonwebtoken::er
 }
 
 // ---------------------------------------------------------------------------
-// Middleware « Needs(permission) »
+// Middleware Needs(permission)
 // ---------------------------------------------------------------------------
 
-/// Attribute carried in App data to say “this scope needs X permission”.
+/// Attribute carried in App data to say “this scope needs X permission”
 #[derive(Clone)]
 pub struct Needs(pub &'static str);
 

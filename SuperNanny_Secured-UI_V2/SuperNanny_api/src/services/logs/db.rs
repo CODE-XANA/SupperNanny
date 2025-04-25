@@ -1,7 +1,6 @@
-use anyhow::Result;
 use diesel::prelude::*;
 
-use crate::{schema::security_logs, state::DbPool};
+use crate::schema::security_logs;
 
 #[derive(Queryable, serde::Serialize)]
 pub struct LogEntry {
@@ -22,10 +21,4 @@ pub struct NewLogEntry<'a> {
     pub action:   &'a str,
     pub detail:   Option<&'a str>,
     pub severity: &'a str,
-}
-
-pub fn insert(pool: &DbPool, e: NewLogEntry) -> Result<()> {
-    let mut conn = pool.get()?;
-    diesel::insert_into(security_logs::table).values(&e).execute(&mut conn)?;
-    Ok(())
 }

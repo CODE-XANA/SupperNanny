@@ -3,10 +3,9 @@ use notify_rust::Notification;
 use serde_json::Value;
 
 use crate::{
-    admin::{Needs, jwt::MANAGE_ROLES},
+    admin::{Needs, jwt::VIEW_EVENTS},
     state::AppState,
 };
-use crate::services::logs::db;
 
 #[post("/alert")]
 pub async fn alert(_state: web::Data<AppState>, payload: web::Json<Value>) -> HttpResponse {
@@ -36,4 +35,11 @@ pub async fn alert(_state: web::Data<AppState>, payload: web::Json<Value>) -> Ht
 
 // ---------------------------------------------------------------------------
 
-pub fn config(cfg: &mut web::ServiceConfig) { cfg.service(alert); }
+
+pub fn config(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::scope("/events")
+            .wrap(Needs(VIEW_EVENTS))
+            .service(alert)
+    );
+}

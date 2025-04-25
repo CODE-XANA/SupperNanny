@@ -1,4 +1,3 @@
-// src/middleware/rate_limit.rs
 use actix_service::{forward_ready, Service, Transform};
 use actix_web::{
     body::BoxBody,

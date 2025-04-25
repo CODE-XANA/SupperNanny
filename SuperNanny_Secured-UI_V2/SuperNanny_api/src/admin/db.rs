@@ -6,17 +6,12 @@ use crate::{
     state::DbPool,
 };
 
+#[allow(dead_code)]
 #[derive(Queryable)]
 pub struct Admin {
     pub user_admin_id: i32,
     pub username_admin: String,
     pub password_hash_admin: String,
-}
-
-#[derive(Queryable)]
-pub struct Permission {
-    pub permission_admin_id: i32,
-    pub permission_admin_name: String,
 }
 
 /// Renvoie l’admin + toutes ses permissions.

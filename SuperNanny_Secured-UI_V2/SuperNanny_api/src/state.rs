@@ -53,7 +53,7 @@ pub static RATE_LIMIT: Lazy<Mutex<HashMap<String, (u32, i64)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 // ---------------------------------------------------------------------------
-// Blacklist de JWT (optionnel)
+// Blacklist de JWT
 // ---------------------------------------------------------------------------
 
 /// Liste des « jti » révoqués / tokens invalidés avant leur expiry.

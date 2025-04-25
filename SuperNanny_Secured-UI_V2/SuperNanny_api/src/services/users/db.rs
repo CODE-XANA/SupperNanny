@@ -1,7 +1,7 @@
 use diesel::prelude::*;
 use anyhow::Result;
 
-use crate::{schema, state::DbPool};
+use crate::state::DbPool;
 use crate::schema::users;
 
 #[derive(Queryable, serde::Serialize)]

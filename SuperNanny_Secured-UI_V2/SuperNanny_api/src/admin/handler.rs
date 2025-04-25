@@ -16,15 +16,43 @@ use crate::{
 struct LoginBody { username: String, password: String }
 
 #[post("/admin/login")]
-pub async fn login(state: Data<AppState>, body: Json<LoginBody>) -> HttpResponse {
-    // 1) récupère admin + permissions
+pub async fn login(state: Data<AppState>, body: Json<LoginBody>, req: actix_web::HttpRequest) -> HttpResponse {
+    use crate::state::{now, LOGIN_ATTEMPTS};
+
+    // 0) IP de la requête
+    let ip = req
+        .connection_info()
+        .realip_remote_addr()
+        .unwrap_or("unknown")
+        .to_string();
+
+    // 1) Vérifie/compte les tentatives
+    {
+        let mut map = LOGIN_ATTEMPTS.lock().unwrap();
+        let entry = map.entry(ip.clone()).or_insert((0, now() + 600));
+        if now() > entry.1 {
+            // fenêtre expirée → on repart à zéro
+            *entry = (0, now() + 600);
+        }
+        if entry.0 >= 5 {
+            // trop de tentatives dans la fenêtre
+            return HttpResponse::TooManyRequests()
+                .body("Trop de tentatives, réessayez dans quelques minutes.");
+        }
+        // on incrémente **provisoirement** ; si auth réussit, on remettra à 0
+        entry.0 += 1;
+    }
+
+    // 2) récupère admin + permissions
     let (admin, perms) = match db::get_admin_with_perms(&state.db, &body.username) {
         Ok(Some(t)) => t,
-        Ok(None)    => return HttpResponse::Unauthorized().body("Unknown user"),
-        Err(e)      => return HttpResponse::InternalServerError().body(e.to_string()),
+        _ => {
+            // compte comme tentative ratée
+            return HttpResponse::Unauthorized().body("Bad credentials");
+        }
     };
 
-    // 2) vérifie le mot de passe
+    // 3) vérifie mot de passe
     let parsed = PasswordHash::new(&admin.password_hash_admin).unwrap();
     if Argon2::default()
         .verify_password(body.password.as_bytes(), &parsed)
@@ -33,12 +61,15 @@ pub async fn login(state: Data<AppState>, body: Json<LoginBody>) -> HttpResponse
         return HttpResponse::Unauthorized().body("Bad credentials");
     }
 
-    // 3) signe un JWT
+    // 4) Auth OK → on remet le compteur IP à 0
+    LOGIN_ATTEMPTS.lock().unwrap().remove(&ip);
+
+    // 5) signe JWT
     let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET");
     let ttl    = std::env::var("JWT_TTL_MIN").unwrap_or_else(|_| "60".into()).parse().unwrap_or(60);
     let token  = jwt::sign(admin.user_admin_id, perms, &secret, ttl);
 
-    // 4) cookie HttpOnly
+    // 6) set-cookie
     let cookie = Cookie::build("admin_token", token)
         .http_only(true).secure(false)
         .same_site(SameSite::Strict).path("/")
@@ -47,6 +78,7 @@ pub async fn login(state: Data<AppState>, body: Json<LoginBody>) -> HttpResponse
 
     HttpResponse::Ok().cookie(cookie).body("Logged in")
 }
+
 
 #[get("/admin/logout")]
 pub async fn logout(req: actix_web::HttpRequest) -> HttpResponse {
