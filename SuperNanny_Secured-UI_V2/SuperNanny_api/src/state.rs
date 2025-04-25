@@ -7,7 +7,7 @@
 use chrono::Utc;
 use diesel::{pg::PgConnection, r2d2};
 use once_cell::sync::Lazy;
-use rand::RngCore;
+use rand::prelude::*;
 use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
@@ -35,9 +35,8 @@ impl AppState {
 #[inline] pub fn now() -> i64 { Utc::now().timestamp() }
 
 pub fn random_bytes<const N: usize>() -> [u8; N] {
-    let mut b = [0u8; N];
-    rand::rngs::OsRng.fill_bytes(&mut b);
-    b
+    // gen() → random() ; thread_rng() → rng()
+    rand::rng().random::<[u8; N]>()
 }
 
 // ---------------------------------------------------------------------------
