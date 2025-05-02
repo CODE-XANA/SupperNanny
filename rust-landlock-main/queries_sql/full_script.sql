@@ -167,11 +167,13 @@ INSERT INTO permissions (permission_id, permission_name) VALUES
   (2, 'manage_users'),
   (3, 'manage_policies'),
   (4, 'view_events'),
-  (5, 'execute_apps');
+  (5, 'execute_apps'),
+  (6, 'approve_policies');
+
 
 
 INSERT INTO role_permissions (role_id, permission_id) VALUES
-  (1, 1), (1, 2), (1, 3), (1, 4), (1, 5),
+  (1, 1), (1, 2), (1, 3), (1, 4), (1, 5),(1,6),
   (2, 2), (2, 3),
   (3, 3);
 
