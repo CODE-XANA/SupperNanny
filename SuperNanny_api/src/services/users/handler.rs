@@ -4,7 +4,7 @@ use actix_web::{delete, get, post, web, HttpResponse};
 use bcrypt::hash;
 use serde::Deserialize;
 use crate::{
-    admin::{jwt::MANAGE_USERS, Needs}, services::users::db as users_db, state::AppState
+    admin::{jwt::MANAGE_USERS, Needs}, admin::csrf::Csrf, services::users::db as users_db, state::AppState
 };
 
 /* ------------------------- helpers internes -------------------------------- */
@@ -116,6 +116,7 @@ async fn user_roles(state: web::Data<AppState>, uid: web::Path<i32>) -> HttpResp
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/users")
+            .wrap(Csrf)
             .wrap(Needs(MANAGE_USERS))
             .service(list)
             .service(roles)

@@ -21,8 +21,8 @@ pub const VIEW_EVENTS:   &str = "view_events";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AdminClaims {
-    sub:     i32,
-    perms:   Vec<String>,
+    pub sub:     i32,
+    pub perms:   Vec<String>,
     exp:     usize,
     pub jti: String, 
 }

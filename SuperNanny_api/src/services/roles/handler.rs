@@ -3,7 +3,7 @@
 use actix_web::{delete, get, post, put, web, HttpResponse};
 use serde::Deserialize;
 use crate::{
-    admin::{jwt::MANAGE_ROLES, Needs}, services::{roles::db as roles_db, users::db as users_db}, state::AppState
+    admin::{jwt::MANAGE_ROLES, Needs}, admin::csrf::Csrf, services::{roles::db as roles_db, users::db as users_db}, state::AppState
 };
 
 /* -------------------------------------------------------------------------- */
@@ -131,6 +131,7 @@ async fn create_with_default(
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/roles")
+            .wrap(Csrf)
             .wrap(Needs(MANAGE_ROLES))
             .service(list)
             .service(create)

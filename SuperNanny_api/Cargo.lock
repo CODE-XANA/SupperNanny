@@ -23,6 +23,7 @@ dependencies = [
  "notify-rust",
  "once_cell",
  "rand",
+ "rand_core 0.9.3",
  "rcgen",
  "regex",
  "reqwest",

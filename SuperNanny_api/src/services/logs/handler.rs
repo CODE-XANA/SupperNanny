@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::{
     admin::{Needs, jwt::VIEW_EVENTS},
+    admin::csrf::Csrf,
     state::AppState,
 };
 
@@ -39,6 +40,7 @@ pub async fn alert(_state: web::Data<AppState>, payload: web::Json<Value>) -> Ht
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/events")
+            .wrap(Csrf)
             .wrap(Needs(VIEW_EVENTS))
             .service(alert)
     );

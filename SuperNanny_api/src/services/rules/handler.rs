@@ -5,6 +5,7 @@ use super::db;
 use serde::Deserialize;
 use crate::admin::Needs;
 use crate::admin::jwt::MANAGE_RULES;
+use crate::admin::csrf::Csrf;
 
 // ---------------- app_policy -----------------------------------
 
@@ -106,6 +107,7 @@ async fn delete_env(state: web::Data<AppState>, pid: web::Path<i32>) -> HttpResp
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/rules")
+        .wrap(Csrf)
         .wrap(Needs(MANAGE_RULES))
         .service(envs)
         .service(env_by_name)

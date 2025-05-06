@@ -7,6 +7,7 @@ mod middleware;
 mod tls;
 
 use actix_cors::Cors;
+use actix_web::http::header;
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use diesel::r2d2::{self, ConnectionManager};
 use diesel::PgConnection;
@@ -57,6 +58,19 @@ async fn main() -> std::io::Result<()> {
     // -------- TLS config --------------------------------------------------------
     let tls_cfg: ServerConfig = tls::rustls_config().expect("TLS config");
 
+    fn build_cors() -> Cors {
+        Cors::default()
+            // --- dev -------------------------------------------------------
+            .allowed_origin("https://127.0.0.1:8444")  // static_server https
+            // --- prod ------------------------------------------------------
+            .allowed_origin("https://127.0.0.1")       // port 443 implicite
+            // ---------------------------------------------------------------
+            .allow_any_method()          // GET/POST/PUT/DELETE/OPTIONS
+            .allow_any_header()          // Content-Type, X-CSRF‑Token, …
+            .supports_credentials()      // indispensable pour le cookie JWT
+            .max_age(3600)
+    }
+
     // -------- app factory -------------------------------------------------------
     let make_app = {
         let state = state.clone();
@@ -64,13 +78,8 @@ async fn main() -> std::io::Result<()> {
             App::new()
                 .app_data(web::Data::new(state.clone()))
                 .wrap(IpLimiter)
+                .wrap(build_cors())
                 .wrap(Logger::default())
-                .wrap(
-                    Cors::default()
-                        .allowed_origin("https://127.0.0.1")
-                        .supports_credentials()
-                        .max_age(3600),
-                )
                 // routes publiques
                 .configure(admin::config)
                 .configure(logs::init)
