@@ -1,0 +1,11 @@
+[package]
+name = "static_server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix-web = { version = "4.4", features = ["rustls-0_23"] }
+actix-files = "0.6"
+rustls = { version = "0.23.27", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2.2.0"
+once_cell = "1"

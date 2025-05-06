@@ -1,0 +1,9 @@
+[build]
+target = "index.html"
+
+[watch]
+ignore = ["src-tauri/**"]
+
+[[copy]]
+source = "static"
+destination = "."
