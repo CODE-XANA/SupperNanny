@@ -1,11 +1,13 @@
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-mod auth;
-mod utils;
-mod logout;          // ← ajouté pour corriger l’import dans layout
+mod api;            // helpers HTTP/CSRF
+mod auth;           // formulaire Login
+mod session;        // SessionProvider + use_session
+mod guard;          // Guard need="perm"
+mod logout;         // bouton Déconnexion
+mod utils;          // (si tu en as encore besoin)
 
-// Pages déjà existantes
 mod dashboard;
 mod configurations;
 mod manage_users;
@@ -34,11 +36,38 @@ pub enum Route {
 fn switch(route: Route) -> Html {
     match route {
         Route::Login => html!(<auth::LoginForm />),
-        Route::Dashboard => html!(<layout::MainLayout><dashboard::Dashboard /></layout::MainLayout>),
-        Route::Configurations => html!(<layout::MainLayout><configurations::Configurations /></layout::MainLayout>),
-        Route::ManageUsers => html!(<layout::MainLayout><manage_users::ManageUsers /></layout::MainLayout>),
-        Route::ManageRoles => html!(<layout::MainLayout><manage_roles::ManageRoles /></layout::MainLayout>),
-        Route::NotFound => html!(<h1>{"404 – Not Found"}</h1>),
+
+        Route::Dashboard => html!(
+            <layout::MainLayout>
+                <dashboard::Dashboard />
+            </layout::MainLayout>
+        ),
+
+        Route::Configurations => html!(
+            <layout::MainLayout>
+                <guard::Guard need="manage_rules">
+                    <configurations::Configurations />
+                </guard::Guard>
+            </layout::MainLayout>
+        ),
+
+        Route::ManageUsers => html!(
+            <layout::MainLayout>
+                <guard::Guard need="manage_users">
+                    <manage_users::ManageUsers />
+                </guard::Guard>
+            </layout::MainLayout>
+        ),
+
+        Route::ManageRoles => html!(
+            <layout::MainLayout>
+                <guard::Guard need="manage_roles">
+                    <manage_roles::ManageRoles />
+                </guard::Guard>
+            </layout::MainLayout>
+        ),
+
+        Route::NotFound => html!(<h1>{ "404 – Not Found" }</h1>),
     }
 }
 
@@ -48,7 +77,9 @@ fn switch(route: Route) -> Html {
 fn app() -> Html {
     html! {
         <BrowserRouter>
-            <Switch<Route> render={switch} />
+            <session::SessionProvider>
+                <Switch<Route> render={switch} />
+            </session::SessionProvider>
         </BrowserRouter>
     }
 }
