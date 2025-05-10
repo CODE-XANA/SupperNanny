@@ -2,21 +2,20 @@ use gloo_net::http::{Method, Request};
 use gloo_net::Error;
 use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::JsValue;
+use js_sys;
 use web_sys::{window, RequestCredentials};
 use js_sys::Reflect;
 
-/* URL de base de l’API */
+/* URL de base de l'API */
 const BASE: &str = "https://127.0.0.1:8443";
 
 /* Récupère le cookie csrf_token=… dans document.cookie */
 fn csrf_from_cookie() -> Option<String> {
     // 1) window / document
     let doc = window()?.document()?;
-
-    // 2) document.cookie via JS Reflect
+    // 2) document.cookie via JS Reflect
     let cookie_js = Reflect::get(doc.as_ref(), &JsValue::from_str("cookie")).ok()?;
     let cookie_str = cookie_js.as_string()?;
-
     // 3) Cherche "csrf_token="
     cookie_str
         .split(';')
@@ -34,29 +33,60 @@ where
     U: DeserializeOwned,
 {
     let url = format!("{BASE}{path}");
-
     let builder = match method {
-        Method::GET    => Request::get(&url),
-        Method::POST   => Request::post(&url),
-        Method::PUT    => Request::put(&url),
-        Method::PATCH  => Request::patch(&url),
+        Method::GET => Request::get(&url),
+        Method::POST => Request::post(&url),
+        Method::PUT => Request::put(&url),
+        Method::PATCH => Request::patch(&url),
         Method::DELETE => Request::delete(&url),
         _ => Request::get(&url),
     }
     .credentials(RequestCredentials::Include);
-
+    
     let builder = if let Some(csrf) = csrf_from_cookie() {
         builder.header("X-CSRF-Token", &csrf)
     } else {
         builder
     };
-
+    
     // Envoi + parse JSON
     let resp = if let Some(b) = body {
         builder.json(b)?.send().await?
     } else {
         builder.send().await?
     };
-
+    
     resp.json().await
+}
+
+/// Appel DELETE "vide" (204 / 200 sans JSON) avec CSRF
+pub async fn fetch_empty(
+    method: Method,
+    path: &str,
+) -> Result<(), Error> {
+    let url = format!("{BASE}{path}");
+    let mut builder = match method {
+        Method::DELETE => Request::delete(&url),
+        _ => unimplemented!("fetch_empty ne gère que DELETE"),
+    }
+    .credentials(RequestCredentials::Include);
+    
+    if let Some(csrf) = csrf_from_cookie() {
+        builder = builder.header("X-CSRF-Token", &csrf);
+    }
+    
+    let resp = builder.send().await?;
+    
+    match resp.status() {
+        200 | 204 => Ok(()),
+        s => {
+            // Create a custom error with the response information
+            let status_text = resp.status_text();
+            let body = resp.text().await.unwrap_or_default();
+            let error_msg = format!("HTTP error: {} {}\nBody: {}", s, status_text, body);
+            // JsError actually expects a js_sys::Error, not just a JsValue
+            let js_error = js_sys::Error::new(&error_msg);
+            Err(Error::JsError(js_error.into()))
+        }
+    }
 }

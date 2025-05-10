@@ -133,7 +133,7 @@ pub fn login_form() -> Html {
     html! {
         <div class="login-container">
             <div class="login-page">
-                <h2>{ "Connexion administrateur" }</h2>
+                <h2>{ "Connexion" }</h2>
                 <form {onsubmit}>
                     <input
                         ref={username_ref}

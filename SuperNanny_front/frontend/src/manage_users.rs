@@ -5,9 +5,9 @@ use log::{error, info};
 use serde::{Deserialize, Serialize};
 use yew::platform::spawn_local;
 use yew::prelude::*;
-use web_sys::{HtmlInputElement, HtmlSelectElement, InputEvent};
+use web_sys::{HtmlInputElement, HtmlSelectElement, InputEvent, window};
 
-use crate::api::fetch_json;
+use crate::api::{ fetch_json, fetch_empty };
 
 /* -------------------------------------------------------------------------- */
 /*                                structures                                  */
@@ -182,35 +182,34 @@ pub fn manage_users() -> Html {
         })
     };
 
-    // suppression utilisateur
     let on_delete_user = {
+    let roles   = roles.clone();
+    let users   = users.clone();
+    let uroles  = user_roles.clone();
+
+    Callback::from(move |uid: i32| {
         let roles   = roles.clone();
         let users   = users.clone();
-        let uroles  = user_roles.clone();
+        let uroles  = uroles.clone();
 
-        Callback::from(move |uid: i32| {
-            let roles   = roles.clone();
-            let users   = users.clone();
-            let uroles  = uroles.clone();
-
-            spawn_local(async move {
-                if web_sys::window()
-                    .unwrap()
-                    .confirm_with_message("Confirmer la suppression ?")
-                    .unwrap_or(false)
-                {
-                    let path = format!("/users/{uid}");
-                    match fetch_json::<(), ()>(Method::DELETE, &path, None::<&()>).await {
-                        Ok(_) => {
-                            info!("Utilisateur supprimé");
-                            reload_all_data(roles, users, uroles).await;
-                        }
-                        Err(e) => error!("delete: {e:?}"),
+        spawn_local(async move {
+            if window()
+                .unwrap()
+                .confirm_with_message("Confirmer la suppression ?")
+                .unwrap_or(false)
+            {
+                // appelle ton nouveau fetch_empty
+                match fetch_empty(Method::DELETE, &format!("/users/{uid}")).await {
+                    Ok(()) => {
+                        // dès que c'est OK, recharge tout
+                        reload_all_data(roles, users, uroles).await;
                     }
+                    Err(e) => error!("Suppression échouée : {e:?}"),
                 }
-            });
-        })
-    };
+            }
+        });
+    })
+};
 
     /* ---------------------- rendu ---------------------- */
     html! {
@@ -221,69 +220,127 @@ pub fn manage_users() -> Html {
                     <h2 class="title is-4 has-text-centered">{ "Utilisateurs" }</h2>
                     <ul>
                         { for (*users).iter().map(|u| {
-                            let role_name = role_name_of(u.user_id, &user_roles, &roles);
-                            html! {
-                                <li class="box" style="margin-bottom:0.5rem;">
-                                    <b>{ &u.username }</b>{ " → " }<i>{ role_name }</i>
-                                    <button
-                                        class="button is-danger is-small"
-                                        style="margin-left:1rem;"
-                                        onclick={{
-                                            let on_del = on_delete_user.clone();
-                                            let id = u.user_id;
-                                            Callback::from(move |_| on_del.emit(id))
-                                        }}
-                                    >
-                                        { "Supprimer" }
-                                    </button>
-                                </li>
-                            }
+                        let role_name = role_name_of(u.user_id, &user_roles, &roles);
+                        html! {
+                            <li class="box mb-2">
+                            <div style="
+                                display: flex;
+                                justify-content: space-between;
+                                align-items: center;
+                            ">
+                                // Texte username → rôle
+                                <span>
+                                <b>{ &u.username }</b>
+                                <span style="margin: 0 0.5rem;">{"→"}</span>
+                                <i>{ role_name }</i>
+                                </span>
+
+                                // Bouton “Supprimer” fin, rouge
+                                <button
+                                style="
+                                    border: 1px solid #e74c3c;
+                                    background: transparent;
+                                    color: #e74c3c;
+                                    padding: 0.25rem 0.5rem;
+                                    font-size: 0.875rem;
+                                    border-radius: 4px;
+                                    cursor: pointer;
+                                "
+                                onclick={{
+                                    let on_del = on_delete_user.clone();
+                                    let id = u.user_id;
+                                    Callback::from(move |_| on_del.emit(id))
+                                }}
+                                >
+                                { "Supprimer" }
+                                </button>
+                            </div>
+                            </li>
+                        }
                         }) }
                     </ul>
-                </div>
+                    </div>
+
 
                 /* ------------ colonne droite : création -------- */
-                <div class="column" style="max-width:450px;margin:0 auto;">
-                    <h2 class="title is-4 has-text-centered">{ "Créer un utilisateur" }</h2>
-                    <div class="box">
-                        <label>{ "Nom d'utilisateur" }</label>
-                        <input
-                            type="text"
-                            value={(*new_username).clone()}
-                            oninput={{
-                                let st = new_username.clone();
-                                Callback::from(move |e: InputEvent| {
-                                    let v = e.target_unchecked_into::<HtmlInputElement>().value();
-                                    st.set(v);
-                                })
-                            }}
-                        />
+                <div class="column" id="user-create" style="max-width:450px; margin:0 auto;">
+                <h2 class="title is-4 has-text-centered">{ "Créer un utilisateur" }</h2>
+                <div class="box" style="padding: 1.5rem;">
+                    // Nom d’utilisateur
+                    <div class="form-group" style="margin-bottom:1rem;">
+                    <label style="display:block; margin-bottom:0.5rem;">{ "Nom d'utilisateur" }</label>
+                    <input
+                        type="text"
+                        placeholder="Entrez le nom d'utilisateur"
+                        value={(*new_username).clone()}
+                        style="width:100%; padding:0.5rem; border-radius:4px; border:1px solid #ccc;"
+                        oninput={Callback::from({
+                        let new_username = new_username.clone();
+                        move |e: InputEvent| {
+                            if let Some(input) = e.target_dyn_into::<HtmlInputElement>() {
+                            new_username.set(input.value());
+                            }
+                        }
+                        })}
+                    />
+                    </div>
 
-                        <label class="mt-2">{ "Mot de passe" }</label>
-                        <input
-                            type="password"
-                            value={(*new_password).clone()}
-                            oninput={{
-                                let st = new_password.clone();
-                                Callback::from(move |e: InputEvent| {
-                                    let v = e.target_unchecked_into::<HtmlInputElement>().value();
-                                    st.set(v);
-                                })
-                            }}
-                        />
+                    // Mot de passe
+                    <div class="form-group" style="margin-bottom:1rem;">
+                    <label style="display:block; margin-bottom:0.5rem;">{ "Mot de passe" }</label>
+                    <input
+                        type="password"
+                        placeholder="Entrez le mot de passe"
+                        value={(*new_password).clone()}
+                        style="width:100%; padding:0.5rem; border-radius:4px; border:1px solid #ccc;"
+                        oninput={Callback::from({
+                        let new_password = new_password.clone();
+                        move |e: InputEvent| {
+                            if let Some(input) = e.target_dyn_into::<HtmlInputElement>() {
+                            new_password.set(input.value());
+                            }
+                        }
+                        })}
+                    />
+                    </div>
 
-                        <label class="mt-2">{ "Rôle" }</label>
-                        <select ref={select_ref.clone()} onchange={on_change_role}>
-                            <option value="-1">{ "Sélectionner…" }</option>
-                            { for (*roles).iter().map(|r| html! {
-                                <option value={r.role_id.to_string()}>{ &r.role_name }</option>
-                            })}
-                        </select>
+                    // Sélecteur de rôle
+                    <div class="form-group" style="margin-bottom:1rem;">
+                    <label style="display:block; margin-bottom:0.5rem;">{ "Rôle" }</label>
+                    <select
+                        ref={select_ref.clone()}
+                        onchange={on_change_role}
+                        style="width:100%; padding:0.5rem; border-radius:4px; border:1px solid #ccc;"
+                    >
+                        <option key="placeholder" value="-1">{ "Sélectionner le rôle" }</option>
+                        { for (*roles).iter().map(|r| html! {
+                            <option key={r.role_id} value={r.role_id.to_string()}>
+                            { &r.role_name }
+                            </option>
+                        }) }
+                    </select>
+                    </div>
 
-                        <button class="button is-primary mt-3" onclick={on_create_user}>
-                            { "Créer l'utilisateur" }
+                    // Bouton de création
+                    <div style="text-align:center; margin-top:1.5rem;">
+                        <button
+                            class="btn-create"
+                            onclick={on_create_user.clone()}
+                            style="
+                            width: 100%;
+                            padding: 0.75rem;
+                            background: #3f51b5;
+                            color: #fff;
+                            border: none;
+                            border-radius: 4px;
+                            font-size: 1rem;
+                            cursor: pointer;
+                            "
+                        >
+                            { "Créer l'utilisateur avec un rôle" }
                         </button>
                     </div>
+                </div>
                 </div>
             </div>
         </div>
