@@ -60,33 +60,39 @@ where
 }
 
 /// Appel DELETE "vide" (204 / 200 sans JSON) avec CSRF
-pub async fn fetch_empty(
+pub async fn fetch_empty<T>(
     method: Method,
-    path: &str,
-) -> Result<(), Error> {
-    let url = format!("{BASE}{path}");
-    let mut builder = match method {
+    path:   &str,
+    body:   Option<&T>,                     // ← 3ᵉ paramètre facultatif
+) -> Result<(), Error>
+where
+    T: Serialize + ?Sized,
+{
+    let url      = format!("{BASE}{path}");
+    let mut req  = match method {
         Method::DELETE => Request::delete(&url),
-        _ => unimplemented!("fetch_empty ne gère que DELETE"),
+        Method::PUT    => Request::put(&url),
+        Method::POST   => Request::post(&url),
+        _              => unreachable!("fetch_empty : DELETE / PUT / POST uniquement"),
     }
     .credentials(RequestCredentials::Include);
-    
+
     if let Some(csrf) = csrf_from_cookie() {
-        builder = builder.header("X-CSRF-Token", &csrf);
+        req = req.header("X-CSRF-Token", &csrf);
     }
-    
-    let resp = builder.send().await?;
-    
+
+    // PUT / POST → éventuel body JSON
+    let resp = match (method, body) {
+        (Method::PUT | Method::POST, Some(b)) => req.json(b)?.send().await?,
+        _                                     => req.send().await?,
+    };
+
     match resp.status() {
         200 | 204 => Ok(()),
         s => {
-            // Create a custom error with the response information
-            let status_text = resp.status_text();
-            let body = resp.text().await.unwrap_or_default();
-            let error_msg = format!("HTTP error: {} {}\nBody: {}", s, status_text, body);
-            // JsError actually expects a js_sys::Error, not just a JsValue
-            let js_error = js_sys::Error::new(&error_msg);
-            Err(Error::JsError(js_error.into()))
+            // gloo‑net n’a **pas** de variant `Error::Response` : on encapsule tout
+            let msg = format!("HTTP {} – {}", s, resp.status_text());
+            Err(Error::JsError(js_sys::Error::new(&msg).into()))
         }
     }
 }

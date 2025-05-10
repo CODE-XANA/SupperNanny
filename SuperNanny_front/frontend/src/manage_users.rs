@@ -199,7 +199,7 @@ pub fn manage_users() -> Html {
                 .unwrap_or(false)
             {
                 // appelle ton nouveau fetch_empty
-                match fetch_empty(Method::DELETE, &format!("/users/{uid}")).await {
+                match fetch_empty(Method::DELETE,&format!("/users/{uid}"), None::<&()> ).await {
                     Ok(()) => {
                         // dès que c'est OK, recharge tout
                         reload_all_data(roles, users, uroles).await;

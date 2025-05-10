@@ -31,6 +31,21 @@ pub struct NewRole<'a> {
     pub role_name: &'a str,
 }
 
+#[derive(Queryable, Identifiable, serde::Serialize, Debug)]
+#[diesel(table_name = schema::permissions, primary_key(permission_id))]
+pub struct Permission {
+    pub permission_id:   i32,
+    pub permission_name: String,
+}
+
+/// Pour insérer dans la table de jointure `role_permissions`
+#[derive(Insertable, Debug)]
+#[diesel(table_name = schema::role_permissions)]
+pub struct NewRolePermission {
+    pub role_id:       i32,
+    pub permission_id: i32,
+}
+
 /* ---- default policies ----------------------------------------------------- */
 
 #[derive(Queryable, Identifiable, Associations, serde::Serialize)]
@@ -126,3 +141,41 @@ pub fn update_default_policy(pool: &DbPool, rid: i32, p: DefaultPolicyPatch) -> 
     Ok(())
 }
 
+/* ---- permissions ----------------------------------------------------- */
+
+/// Assigne une permission à un rôle (ne fait rien si déjà présente)
+pub fn assign_permission(pool: &DbPool, rid: i32, pid: i32) -> Result<(), DbErr> {
+    let mut c = conn(pool)?;
+    diesel::insert_into(schema::role_permissions::table)
+        .values(&NewRolePermission { role_id: rid, permission_id: pid })
+        .on_conflict_do_nothing()
+        .execute(&mut c)?;
+    Ok(())
+}
+
+/// Retire une permission d’un rôle
+pub fn remove_permission(pool: &DbPool, rid: i32, pid: i32) -> Result<(), DbErr> {
+    let mut c = conn(pool)?;
+    diesel::delete(
+        schema::role_permissions::table
+            .filter(schema::role_permissions::role_id.eq(rid))
+            .filter(schema::role_permissions::permission_id.eq(pid)),
+    )
+    .execute(&mut c)?;
+    Ok(())
+}
+
+/// Liste toutes les permissions attachées à un rôle
+pub fn list_permissions(pool: &DbPool, rid: i32) -> Result<Vec<Permission>, DbErr> {
+    let mut c = conn(pool)?;
+    schema::permissions::table
+        .inner_join(
+            schema::role_permissions::table.on(
+                schema::permissions::permission_id
+                    .eq(schema::role_permissions::permission_id),
+            ),
+        )
+        .filter(schema::role_permissions::role_id.eq(rid))
+        .select((schema::permissions::permission_id, schema::permissions::permission_name))
+        .load::<Permission>(&mut c)
+}

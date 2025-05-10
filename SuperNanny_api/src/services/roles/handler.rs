@@ -124,6 +124,53 @@ async fn create_with_default(
     HttpResponse::Ok().json(serde_json::json!({ "role_id": rid }))
 }
 
+/* ---- permissions -------------------------------- */
+
+// GET  /roles/{rid}/permissions
+#[get("/{rid}/permissions")]
+async fn list_permissions(
+    state: web::Data<AppState>,
+    rid: web::Path<i32>,
+) -> HttpResponse {
+    match roles_db::list_permissions(&state.db, rid.into_inner()) {
+        Ok(v)  => HttpResponse::Ok().json(v),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct PermBody {
+    permission_id: i32,
+}
+
+// POST /roles/{rid}/permissions
+#[post("/{rid}/permissions")]
+async fn add_permission(
+    state: web::Data<AppState>,
+    path: web::Path<i32>,
+    body: web::Json<PermBody>,
+) -> HttpResponse {
+    let rid = path.into_inner();
+    let pid = body.permission_id;
+    match roles_db::assign_permission(&state.db, rid, pid) {
+        Ok(_)  => HttpResponse::Ok().finish(),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+/// DELETE /roles/{rid}/permissions/{pid}
+#[delete("/{rid}/permissions/{pid}")]
+async fn remove_permission(
+    state: web::Data<AppState>,
+    path: web::Path<(i32, i32)>,
+) -> HttpResponse {
+    let (rid, pid) = path.into_inner();
+    match roles_db::remove_permission(&state.db, rid, pid) {
+        Ok(_)  => HttpResponse::Ok().finish(),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                    scope                                   */
 /* -------------------------------------------------------------------------- */
@@ -142,6 +189,10 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .service(create_default)
             .service(update_default)
             // one-shot rôle + policies
-            .service(create_with_default),
+            .service(create_with_default)
+            // permissions
+            .service(list_permissions)
+            .service(add_permission)
+            .service(remove_permission)
     );
 }

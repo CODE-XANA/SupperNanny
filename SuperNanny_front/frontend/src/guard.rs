@@ -13,6 +13,6 @@ pub fn guard(props: &GuardProps) -> Html {
     match &*use_session() {
         None => html!(<p>{"Chargement…"}</p>),
         Some(s) if s.perms.contains(props.need) => html! { for props.children.iter() },
-        _ => html!(<h1>{"403 – pas la permission"}</h1>),
+        _ => html!(<h1>{"403 – Vous n'avez pas la permission d'être ici"}</h1>),
     }
 }
