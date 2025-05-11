@@ -962,43 +962,44 @@ fn main() -> Result<()> {
             if let Err(e) = log_denial_event(app, denial, resource_type, &credentials.token) {
                 eprintln!("Warning: Failed to log denial event: {}", e);
             }
-            // Process denials and update policy if user has permission
-            let updated = process_denials(denials.clone(), &mut policy, &permissions)?;
+        }
+        
+        // Process denials and update policy if user has permission
+        let updated = process_denials(denials.clone(), &mut policy, &permissions)?;
 
-            // Update policy on server if changes were made
-            if updated {
-                match update_policy_on_server(app, &policy, &credentials.token, &permissions) {
-                    Ok(_) => {
-                        println!("Your policy update request has been submitted and is pending approval.");
-                        println!("Until approved, the current policy remains in effect.");
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Failed to upload policy update: {}", e);
+        // Update policy on server if changes were made
+        if updated {
+            match update_policy_on_server(app, &policy, &credentials.token, &permissions) {
+                Ok(_) => {
+                    println!("Your policy update request has been submitted and is pending approval.");
+                    println!("Until approved, the current policy remains in effect.");
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to upload policy update: {}", e);
+                    println!(
+                        "Policy was updated locally but changes were not saved on the server."
+                    );
+                }
+            }
+
+            // Offer to rerun with current (approved) policy
+            let rerun = dialoguer::Confirm::new()
+                .with_prompt("Would you like to rerun the application with the current (approved) policy?")
+                .default(true)
+                .interact()
+                .unwrap_or(false);
+
+            if rerun {
+                println!("Rerunning application with approved policy...");
+                match run_strace(app_path, app_args, &original_policy, "rerun_log") {
+                    Ok((status, _)) => {
                         println!(
-                            "Policy was updated locally but changes were not saved on the server."
+                            "Application rerun completed with exit code: {}",
+                            status.code().unwrap_or(-1)
                         );
                     }
-                }
-
-                // Offer to rerun with current (approved) policy
-                let rerun = dialoguer::Confirm::new()
-                    .with_prompt("Would you like to rerun the application with the current (approved) policy?")
-                    .default(true)
-                    .interact()
-                    .unwrap_or(false);
-
-                if rerun {
-                    println!("Rerunning application with approved policy...");
-                    match run_strace(app_path, app_args, &original_policy, "rerun_log") {
-                        Ok((status, _)) => {
-                            println!(
-                                "Application rerun completed with exit code: {}",
-                                status.code().unwrap_or(-1)
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!("Error during rerun: {}", e);
-                        }
+                    Err(e) => {
+                        eprintln!("Error during rerun: {}", e);
                     }
                 }
             }
