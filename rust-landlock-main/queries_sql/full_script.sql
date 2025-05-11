@@ -173,9 +173,9 @@ INSERT INTO permissions (permission_id, permission_name) VALUES
 
 
 INSERT INTO role_permissions (role_id, permission_id) VALUES
-  (1, 1), (1, 2), (1, 3), (1, 4), (1, 5),(1,6),
-  (2, 2), (2, 3),
-  (3, 3);
+  (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), 
+  (2, 4), (2, 5),                                 
+  (3, 5);                                        
 
 INSERT INTO users (user_id, username, password_hash) VALUES
   (1, 'admin', '$2a$12$Gp.L8taKXJqc/N/T40fbyekjONH1PaioOfDcvHkubYVDOurNXRoPi'),
