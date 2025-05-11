@@ -1,0 +1,802 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SecurityLogEntry {
+    pub username: Option<String>,
+    pub ip_address: Option<String>,
+    pub action: String,
+    pub detail: Option<String>,
+    pub severity: String, // "info", "warning", "critical"
+}
+use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct RuleSet {
+    pub ro_paths: Vec<String>,
+    pub rw_paths: Vec<String>,
+    pub tcp_bind: Vec<u16>,
+    pub tcp_connect: Vec<u16>,
+    pub allowed_ips: Vec<String>,
+    pub allowed_domains: Vec<String>,
+}
+use serde::{Serialize, Deserialize};
+use validator::Validate;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AuthResponse {
+    pub token: String,
+}
+
+#[derive(Serialize)]
+pub struct RoleInfo {
+    pub roles: Vec<String>,
+    pub permissions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Validate)]
+pub struct LogEventRequest {
+    #[validate(length(min = 1, message = "hostname cannot be empty"))]
+    pub hostname: String,
+
+    #[validate(length(min = 1, message = "app_name cannot be empty"))]
+    pub app_name: String,
+
+    pub denied_path: Option<String>,
+
+    #[validate(length(min = 1, message = "operation cannot be empty"))]
+    pub operation: String,
+
+    #[validate(length(min = 1, message = "result cannot be empty"))]
+    pub result: String,
+
+    pub remote_ip: Option<String>,
+
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppPolicyCreateRequest {
+    pub app_name: String,
+    pub role_id: i32,
+    pub default_ro: String,
+    pub default_rw: String,
+    pub tcp_bind: String,
+    pub tcp_connect: String,
+    pub allowed_ips: String,
+    pub allowed_domains: String,
+}use serde::Serialize;
+
+#[derive(Serialize)]
+pub struct Policy {
+    pub default_ro: String,
+    pub default_rw: String,
+    pub tcp_bind: String,
+    pub tcp_connect: String,
+    pub allowed_ips: String,
+    pub allowed_domains: String,
+}
+
+#[derive(Serialize)]
+pub struct AppRuleSet {
+    pub app_name: String,
+    pub policy: Policy,
+}
+
+#[derive(Serialize)]
+pub struct RuleSetResponse {
+    pub default_policies: Vec<Policy>,
+    pub app_policies: Vec<AppRuleSet>,
+}
+pub mod dto;
+pub mod policy;
+pub mod security_log;use r2d2::Pool;
+use r2d2_postgres::PostgresConnectionManager;
+use postgres::NoTls;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db_pool: Pool<PostgresConnectionManager<NoTls>>,
+}
+mod state;
+mod auth;
+mod roles;
+mod ruleset;
+mod models;
+mod events;
+mod utils;
+mod policy;
+
+use axum::{
+    extract::Extension,
+    http::Request,
+    routing::{get, post},
+    Router,
+};
+use dotenvy::dotenv;
+use r2d2_postgres::PostgresConnectionManager;
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
+use tokio;
+use tower_governor::{
+    governor::GovernorConfigBuilder,
+    key_extractor::KeyExtractor,
+    GovernorLayer,
+    GovernorError,
+};
+use tracing::info;
+use crate::ruleset::handlers::get_ruleset;
+use auth::handlers::{login, who_am_i};
+use roles::get_roles;
+use crate::events::log_event;
+use crate::state::AppState;
+use crate::policy::handler::add_app_policy;
+
+#[derive(Clone, Copy)]
+pub struct SafeIpExtractor;
+
+impl KeyExtractor for SafeIpExtractor {
+    type Key = IpAddr;
+    
+    fn extract<B>(&self, req: &Request<B>) -> Result<IpAddr, GovernorError> {
+        Ok(req.extensions()
+            .get::<SocketAddr>()
+            .map(|sock| sock.ip())
+            .unwrap_or_else(|| {
+                tracing::debug!("Falling back to 127.0.0.1 for rate-limiting key");
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+            }))
+    }
+}
+
+
+#[tokio::main]
+async fn main() {
+    dotenv().ok();
+    tracing_subscriber::fmt::init();
+
+    let db_url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        std::env::var("DB_USER").unwrap(),
+        std::env::var("DB_PASS").unwrap(),
+        std::env::var("DB_HOST").unwrap(),
+        std::env::var("DB_PORT").unwrap(),
+        std::env::var("DB_NAME").unwrap()
+    );
+
+    let manager = PostgresConnectionManager::new(db_url.parse().unwrap(), postgres::NoTls);
+    let pool = r2d2::Pool::builder()
+        .max_size(10)
+        .build(manager)
+        .expect("Failed to create pool");
+
+    let app_state = AppState { db_pool: pool };
+
+    // ✅ Governor config using SafeIpExtractor
+    let governor_cfg = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(5)
+            .burst_size(10)
+            .key_extractor(SafeIpExtractor)
+            .finish()
+            .expect("Failed to build GovernorConfig"),
+    );
+
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, World!" }))
+        .route("/auth/login", post(login))
+        .route("/whoami", get(who_am_i))
+        .route("/auth/roles", get(get_roles))
+        .route("/auth/ruleset", get(get_ruleset))
+        .route("/events/log", post(log_event))
+        .route("/auth/ruleset/update", post(add_app_policy))
+        .layer(GovernorLayer {
+            config: governor_cfg,
+        })
+        .layer(Extension(app_state));
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3005));
+    info!("🚀 Server running at http://{}", addr);
+        
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("Failed to bind to address");
+        
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .unwrap();
+}
+use axum::{
+    extract::{Extension, Json},
+    http::StatusCode,
+};
+use std::sync::Arc;
+
+use crate::{
+    auth::jwt::AuthUser,
+    models::dto::AppPolicyCreateRequest,
+    state::AppState,
+    utils::permissions::has_permission,
+};
+use tokio::task::spawn_blocking;
+
+pub async fn add_app_policy(
+    AuthUser { claims }: AuthUser,
+    Extension(state): Extension<AppState>,
+    Json(body): Json<AppPolicyCreateRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if !has_permission(Arc::new(state.clone()), claims.user_id, "manage_policies").await? {
+        return Err((StatusCode::FORBIDDEN, "Permission denied".to_string()));
+    }
+
+    let state = state.clone();
+    spawn_blocking(move || {
+        let mut conn = state.db_pool.get()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
+
+        conn.execute(
+            "
+            INSERT INTO app_policy (
+                app_name, role_id, default_ro, default_rw, tcp_bind, tcp_connect,
+                allowed_ips, allowed_domains, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            ON CONFLICT (app_name, role_id)
+            DO UPDATE SET
+                default_ro = EXCLUDED.default_ro,
+                default_rw = EXCLUDED.default_rw,
+                tcp_bind = EXCLUDED.tcp_bind,
+                tcp_connect = EXCLUDED.tcp_connect,
+                allowed_ips = EXCLUDED.allowed_ips,
+                allowed_domains = EXCLUDED.allowed_domains,
+                updated_at = NOW()
+            ",
+            &[
+                &body.app_name,
+                &body.role_id,
+                &body.default_ro,
+                &body.default_rw,
+                &body.tcp_bind,
+                &body.tcp_connect,
+                &body.allowed_ips,
+                &body.allowed_domains,
+            ],
+        ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Insert error: {e}")))?;
+
+        Ok(())
+    })
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Join error".to_string()))??;
+
+    Ok(StatusCode::CREATED)
+}
+pub mod handler;
+use axum::{
+    extract::{Extension, Json},
+    http::StatusCode,
+};
+use crate::{
+    auth::jwt::AuthUser,
+    models::dto::LogEventRequest,
+    state::AppState,
+};
+
+use validator::Validate;
+
+pub async fn log_event(
+    AuthUser { claims }: AuthUser,
+    Extension(state): Extension<AppState>,
+    Json(payload): Json<LogEventRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if let Err(validation_errors) = payload.validate() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Validation failed: {validation_errors}"),
+        ));
+    }
+
+    let username = claims.sub;
+    let state = state.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let mut conn = state.db_pool.get()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
+
+        let user_id: Option<i32> = conn.query_opt(
+            "SELECT user_id FROM users WHERE username = $1",
+            &[&username],
+        )
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("User ID lookup failed: {e}")))?
+        .map(|row| row.get(0));
+
+        conn.execute(
+            "
+            INSERT INTO sandbox_events (
+                hostname, app_name, denied_path, operation, result,
+                user_id, remote_ip, domain, timestamp
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            ",
+            &[
+                &payload.hostname,
+                &payload.app_name,
+                &payload.denied_path,
+                &payload.operation,
+                &payload.result,
+                &user_id,
+                &payload.remote_ip,
+                &payload.domain,
+            ],
+        ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Insert failed: {e}")))?;
+
+        Ok(())
+    })
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Join error".to_string()))??;
+
+    Ok(StatusCode::CREATED)
+}
+pub mod handlers;
+pub use handlers::log_event;
+use axum::{
+    extract::Extension,
+    http::StatusCode,
+    Json,
+};
+
+use crate::{
+    auth::jwt::AuthUser,
+    models::policy::RuleSetResponse,
+    ruleset::{default::get_default_rules, app_name::get_app_rules},
+    state::AppState,
+};
+
+/// Returns a combined set of default and application-specific policies for the authenticated user.
+pub async fn get_ruleset(
+    AuthUser { claims }: AuthUser,
+    Extension(state): Extension<AppState>,
+) -> Result<Json<RuleSetResponse>, (StatusCode, String)> {
+    let role_id = claims.role_id;
+
+    // Get default policies
+    let default = get_default_rules(Extension(state.clone()), role_id).await?;
+    
+    // Get application-specific policies
+    let app = get_app_rules(Extension(state), role_id).await?;
+
+    Ok(Json(RuleSetResponse {
+        default_policies: default.0,
+        app_policies: app.0,
+    }))
+}
+use axum::{extract:: Extension, http::StatusCode, Json};
+use crate::{models::policy::{Policy, AppRuleSet}, state::AppState};
+use tokio::task::spawn_blocking;
+
+/// Get app policies for a given role_id
+pub async fn get_app_rules(
+    Extension(state): Extension<AppState>,
+    role_id: i32,
+) -> Result<Json<Vec<AppRuleSet>>, (StatusCode, String)> {
+    let state = state.clone();
+
+    let result = spawn_blocking(move || {
+        let mut conn = state
+            .db_pool
+            .get()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
+
+        let rows = conn
+            .query(
+                "
+                SELECT app_name, default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains
+                FROM app_policy
+                WHERE role_id = $1
+                ",
+                &[&role_id],
+            )
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Query error: {e}")))?;
+
+        let apps = rows
+            .into_iter()
+            .map(|row| AppRuleSet {
+                app_name: row.get(0),
+                policy: Policy {
+                    default_ro: row.get(1),
+                    default_rw: row.get(2),
+                    tcp_bind: row.get(3),
+                    tcp_connect: row.get(4),
+                    allowed_ips: row.get(5),
+                    allowed_domains: row.get(6),
+                },
+            })
+            .collect();
+
+        Ok(apps)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Join error: {e}")))??;
+
+    Ok(Json(result))
+}
+pub mod handlers;
+pub mod default;
+pub mod app_name;
+
+use axum::{extract:: Extension, http::StatusCode, Json};
+use crate::{models::policy::Policy, state::AppState};
+use tokio::task::spawn_blocking;
+
+/// Get default policies for a given role_id
+pub async fn get_default_rules(
+    Extension(state): Extension<AppState>,
+    role_id: i32,
+) -> Result<Json<Vec<Policy>>, (StatusCode, String)> {
+    let state = state.clone();
+
+    let result = spawn_blocking(move || {
+        let mut conn = state
+            .db_pool
+            .get()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
+
+        let rows = conn
+            .query(
+                "
+                SELECT default_ro, default_rw, tcp_bind, tcp_connect, allowed_ips, allowed_domains
+                FROM default_policies
+                WHERE role_id = $1
+                ",
+                &[&role_id],
+            )
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Query error: {e}")))?;
+
+        let policies = rows
+            .into_iter()
+            .map(|row| Policy {
+                default_ro: row.get(0),
+                default_rw: row.get(1),
+                tcp_bind: row.get(2),
+                tcp_connect: row.get(3),
+                allowed_ips: row.get(4),
+                allowed_domains: row.get(5),
+            })
+            .collect();
+
+        Ok(policies)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Join error: {e}")))??;
+
+    Ok(Json(result))
+}
+use crate::state::AppState;
+use axum::http::StatusCode;
+use std::sync::Arc;
+use tokio::task::spawn_blocking;
+
+pub async fn has_permission(
+    state: Arc<AppState>,
+    user_id: i32,
+    permission: &str,
+) -> Result<bool, (StatusCode, String)> {
+    let state = state.clone();
+    let permission = permission.to_string();
+
+    let result = spawn_blocking(move || {
+        let mut conn = state.db_pool.get()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
+
+        let row = conn.query_opt(
+            r#"
+            SELECT 1
+            FROM user_roles ur
+            JOIN role_permissions rp ON ur.role_id = rp.role_id
+            JOIN permissions p ON rp.permission_id = p.permission_id
+            WHERE ur.user_id = $1 AND p.permission_name = $2
+            "#,
+            &[&user_id, &permission],
+        )
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Query failed: {e}")))?;
+
+        Ok(row.is_some())
+    })
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Join error".to_string()))??;
+
+    Ok(result)
+}
+pub mod logger;
+pub mod permissions;
+use crate::models::security_log::SecurityLogEntry;
+use crate::state::AppState;
+use std::sync::Arc;
+use tokio::task::spawn_blocking;
+use axum::http::StatusCode;
+
+pub async fn log_security_event(
+    state: Arc<AppState>,
+    log: SecurityLogEntry,
+) -> Result<(), (StatusCode, String)> {
+    spawn_blocking(move || {
+        let mut conn = state.db_pool.get()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
+
+        conn.execute(
+            "
+            INSERT INTO security_logs (username, ip_address, action, detail, severity)
+            VALUES ($1, $2, $3, $4, $5)
+            ",
+            &[
+                &log.username,
+                &log.ip_address,
+                &log.action,
+                &log.detail,
+                &log.severity,
+            ],
+        ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Insert error: {e}")))?;
+
+        Ok(())
+    }).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Join error".into()))?
+}
+use axum::{
+    extract::FromRequestParts,
+    http::{request::Parts, StatusCode},
+};
+use axum_extra::headers::{authorization::Bearer, Authorization};
+use axum_extra::TypedHeader;
+use jsonwebtoken::{decode, DecodingKey, Validation};
+use serde::{Deserialize, Serialize};
+use std::env;
+
+/// JWT claims struct
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub user_id: i32,
+    pub role_id: i32,
+    pub exp: usize,
+}
+
+/// Authenticated user extracted from JWT
+#[derive(Debug)]
+pub struct AuthUser {
+    pub claims: Claims,
+}
+
+impl<S> FromRequestParts<S> for AuthUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, String);
+
+    // ✅ native async fn: no macros
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let TypedHeader(Authorization(bearer)) =
+            TypedHeader::<Authorization<Bearer>>::from_request_parts(parts, state)
+                .await
+                .map_err(|_| (StatusCode::UNAUTHORIZED, "Missing or invalid token".to_string()))?;
+
+        let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "my_very_secret_key".to_string());
+
+        let token_data = decode::<Claims>(
+            bearer.token(),
+            &DecodingKey::from_secret(secret.as_ref()),
+            &Validation::default(),
+        )
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "Invalid token".to_string()))?;
+
+        Ok(AuthUser {
+            claims: token_data.claims,
+        })
+    }
+}
+use axum::{
+    extract::{ConnectInfo, Extension, Json},
+    http::StatusCode,
+};
+use bcrypt::verify;
+use jsonwebtoken::{encode, EncodingKey, Header};
+use serde::Serialize;
+use std::{
+    env,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tokio::task::spawn_blocking;
+
+use crate::{
+    auth::jwt::{AuthUser, Claims},
+    models::dto::{AuthResponse, LoginRequest},
+    models::security_log::SecurityLogEntry,
+    state::AppState,
+    utils::logger::log_security_event,
+};
+
+#[derive(Serialize)]
+pub struct WhoAmIResponse {
+    pub user_id: i32,
+    pub role_id: i32,
+}
+
+#[axum::debug_handler]
+pub async fn login(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(state): Extension<AppState>,
+    Json(payload): Json<LoginRequest>,
+) -> Result<Json<AuthResponse>, (StatusCode, String)> {
+    let username = payload.username.clone();
+    let password = payload.password.clone();
+    let client_ip = Some(addr.ip().to_string());
+
+    let state_clone = state.clone();
+
+    // Spawn blocking DB + password hashing logic
+    let result = spawn_blocking(move || {
+        let mut conn = state_clone
+            .db_pool
+            .get()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
+
+        // Fetch user_id and hashed password
+        let row = conn.query_opt(
+            "SELECT user_id, password_hash FROM users WHERE username = $1",
+            &[&username],
+        ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Database query error: {e}")))?;
+
+        let (user_id, password_hash): (i32, String) = match row {
+            Some(row) => (row.get(0), row.get(1)),
+            None => return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())),
+        };
+
+        // Fetch role_id from user_roles
+        let role_row = conn.query_opt(
+            "SELECT role_id FROM user_roles WHERE user_id = $1",
+            &[&user_id],
+        ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Role lookup error: {e}")))?;
+
+        let role_id: i32 = match role_row {
+            Some(row) => row.get(0),
+            None => return Err((StatusCode::UNAUTHORIZED, "User has no role assigned".into())),
+        };
+
+        // Check password
+        let valid = verify(&password, &password_hash)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("bcrypt error: {e}")))?;
+
+        if !valid {
+            return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".into()));
+        }
+
+        // Token generation
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::new(0, 0))
+            .as_secs();
+        let exp = now + 3600;
+
+        let claims = Claims {
+            sub: username.clone(),
+            user_id,
+            role_id,
+            exp: exp as usize,
+        };
+
+        let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "my_very_secret_key".into());
+
+        let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Token generation error: {e}"),
+                )
+            })?;
+
+        Ok::<(String, String), (StatusCode, String)>((username, token))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Join error: {e}")))?;
+
+    match result {
+        Ok((username, token)) => {
+            let _ = log_security_event(
+                Arc::new(state.clone()),
+                SecurityLogEntry {
+                    username: Some(username),
+                    ip_address: client_ip,
+                    action: "successful_login".into(),
+                    detail: Some("User logged in".into()),
+                    severity: "info".into(),
+                },
+            ).await;
+
+            Ok(Json(AuthResponse { token }))
+        }
+
+        Err((status, message)) => {
+            let _ = log_security_event(
+                Arc::new(state.clone()),
+                SecurityLogEntry {
+                    username: Some(payload.username.clone()),
+                    ip_address: client_ip,
+                    action: "failed_login".into(),
+                    detail: Some(message.clone()),
+                    severity: "warning".into(),
+                },
+            ).await;
+
+            Err((status, message))
+        }
+    }
+}
+
+pub async fn who_am_i(AuthUser { claims }: AuthUser) -> Json<WhoAmIResponse> {
+    Json(WhoAmIResponse {
+        user_id: claims.user_id,
+        role_id: claims.role_id,
+    })
+}
+pub mod jwt;
+pub mod handlers;
+use axum::{extract::Extension, Json, http::StatusCode};
+use crate::{
+    auth::jwt::AuthUser,
+    state::AppState,
+    models::dto::RoleInfo,
+};
+use tokio::task::spawn_blocking;
+
+pub async fn get_roles(
+    AuthUser { claims }: AuthUser,
+    Extension(state): Extension<AppState>,
+) -> Result<Json<RoleInfo>, (StatusCode, String)> {
+    let username = claims.sub;
+    let state = state.clone();
+
+    let result = spawn_blocking(move || {
+        let mut conn = state.db_pool.get()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB pool error: {e}")))?;
+
+        let rows = conn.query(
+            "
+            SELECT r.role_name, p.permission_name
+            FROM users u
+            JOIN user_roles ur ON u.user_id = ur.user_id
+            JOIN roles r ON ur.role_id = r.role_id
+            JOIN role_permissions rp ON r.role_id = rp.role_id
+            JOIN permissions p ON rp.permission_id = p.permission_id
+            WHERE u.username = $1
+            ",
+            &[&username],
+        )
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Query error: {e}")))?;
+
+        let mut roles = Vec::new();
+        let mut permissions = Vec::new();
+
+        for row in rows {
+            let role: String = row.get(0);
+            let permission: String = row.get(1);
+            if !roles.contains(&role) { roles.push(role); }
+            if !permissions.contains(&permission) { permissions.push(permission); }
+        }
+
+        Ok(RoleInfo { roles, permissions })
+    })
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Blocking task failed".to_string()))??;
+
+    Ok(Json(result))
+}
+pub mod handlers;
+pub use handlers::get_roles;
