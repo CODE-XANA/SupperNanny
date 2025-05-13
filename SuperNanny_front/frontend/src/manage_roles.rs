@@ -25,16 +25,6 @@ struct Permission {
     permission_name: String,
 }
 
-/// Catalogue statique (côté front) des permissions existantes.
-fn all_permissions() -> Vec<Permission> {
-    vec![
-        Permission { permission_id: 1, permission_name: "manage_policies".into() },
-        Permission { permission_id: 2, permission_name: "view_events".into()    },
-        Permission { permission_id: 3, permission_name: "execute_apps".into()   },
-        Permission { permission_id: 4, permission_name: "view_policies".into()  },
-    ]
-}
-
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
 struct DefaultPolicyData {
     default_ro:      String,
@@ -61,22 +51,39 @@ pub fn manage_roles() -> Html {
     let selected_role  = use_state(|| None::<Role>);
     let permissions    = use_state(Vec::<Permission>::new);
     let dp_state       = use_state(DefaultPolicyData::default);
+    let all_perms      = use_state(Vec::<Permission>::new); // Toutes les permissions disponibles
 
     /* -------- states création -------- */
     let new_role_name  = use_state(String::new);
     let new_dp         = use_state(DefaultPolicyData::default);
 
     /* ------------------------------------------------------------------ */
-    /* 1. charge tous les rôles au montage                                */
+    /* 1. charge tous les rôles et toutes les permissions au montage      */
     /* ------------------------------------------------------------------ */
     {
         let roles = roles.clone();
+        let all_perms = all_perms.clone();
         use_effect_with((), move |_| {
+            // Chargement des rôles
             spawn_local(async move {
                 if let Ok(list) = fetch_json::<(), Vec<Role>>(Method::GET, "/roles", None::<&()>).await {
                     roles.set(list);
                 }
             });
+            
+            // Chargement de toutes les permissions disponibles
+            let all_perms_clone = all_perms.clone();
+            spawn_local(async move {
+                match fetch_json::<(), Vec<Permission>>(Method::GET, "/roles/permissions", None::<&()>).await {
+                    Ok(list) => all_perms_clone.set(list),
+                    Err(err) => {
+                        web_sys::console::log_1(&format!("Erreur lors du chargement des permissions: {:?}", err).into());
+                        
+                        all_perms_clone.set(Vec::new());
+                    }
+                }
+            });
+            
             || ()
         });
     }
@@ -94,16 +101,21 @@ pub fn manage_roles() -> Html {
                 // permissions du rôle
                 let perms_handle = perms.clone();
                 spawn_local(async move {
-                    let path = format!("/roles/{rid}/permissions");
+                    let path = format!("/roles/{}/permissions", rid);
                     if let Ok(v) = fetch_json::<(), Vec<Permission>>(Method::GET, &path, None::<&()>).await {
                         perms_handle.set(v);
+                    } else {
+                        // En cas d'erreur, log pour debug
+                        web_sys::console::log_1(&"Error loading permissions".into());
+                        // Réinitialiser pour éviter d'afficher des données périmées
+                        perms_handle.set(Vec::new());
                     }
                 });
 
                 // default policies
                 let dp_handle = dp.clone();
                 spawn_local(async move {
-                    let path = format!("/roles/default_policies/{rid}");
+                    let path = format!("/roles/default_policies/{}", rid);
                     match fetch_json::<(), DefaultPolicyData>(Method::GET, &path, None::<&()>).await {
                         Ok(d)  => dp_handle.set(d),
                         Err(_) => dp_handle.set(DefaultPolicyData::default()), // Aucun encore
@@ -144,7 +156,7 @@ pub fn manage_roles() -> Html {
                 let sel2  = sel.clone();
 
                 spawn_local(async move {
-                    if fetch_empty(Method::DELETE, &format!("/roles/{rid}"), None::<&()>).await.is_ok() {
+                    if fetch_empty(Method::DELETE, &format!("/roles/{}", rid), None::<&()>).await.is_ok() {
                         // recharge liste + désélection
                         if let Ok(v) = fetch_json::<(), Vec<Role>>(Method::GET, "/roles", None::<&()>).await {
                             roles2.set(v);
@@ -158,56 +170,75 @@ pub fn manage_roles() -> Html {
 
     /* --- toggle permission ------------------------------------------ */
     let on_toggle_perm = {
-    let sel   = selected_role.clone();
-    let perms = permissions.clone();
+        let sel   = selected_role.clone();
+        let perms = permissions.clone();
 
-    Callback::from(move |perm: Permission| {
-        if let Some(r) = &*sel {
-            let rid    = r.role_id;
-            let pid    = perm.permission_id;
-            let perms2 = perms.clone();
-
-            spawn_local(async move {
-                // 1) suppression ou création
-                let res = if perms2.iter().any(|p| p.permission_id == pid) {
-                    // déjà assignée => DELETE
-                    fetch_empty(
-                        Method::DELETE,
-                        &format!("/roles/perm/{rid}/{pid}"),
-                        None::<&()>
-                    )
-                    .await
-                } else {
-                    // pas encore => POST { role_id, permission_id }
-                    let body = serde_json::json!({
-                        "role_id":      rid,
-                        "permission_id": pid,
+        Callback::from(move |perm: Permission| {
+            if let Some(r) = &*sel {
+                let rid    = r.role_id;
+                let pid    = perm.permission_id;
+                let perms2 = perms.clone();
+                
+                // Check if we're adding or removing
+                let is_removing = perms2.iter().any(|p| p.permission_id == pid);
+                
+                // IMPORTANT: Do immediate UI update before API call
+                if !is_removing {
+                    // Adding - immediately update UI
+                    let mut updated_perms = (*perms2).clone();
+                    updated_perms.push(Permission {
+                        permission_id: pid,
+                        permission_name: perm.permission_name.clone(),
                     });
-                    fetch_json::<_, ()>(
-                        Method::POST,
-                        "/roles/perm",
-                        Some(&body),
-                    )
-                    .await
-                };
-
-                // 2) si OK, on reload tout de suite
-                if res.is_ok() {
-                    if let Ok(new_list) = fetch_json::<(), Vec<Permission>>(
-                        Method::GET,
-                        &format!("/roles/{rid}/permissions"),
-                        None::<&()>, 
-                    )
-                    .await
-                    {
-                        perms2.set(new_list);
-                    }
+                    perms2.set(updated_perms);
+                } else {
+                    // Removing - immediately update UI
+                    let updated_perms = perms2.iter()
+                        .filter(|p| p.permission_id != pid)
+                        .cloned()
+                        .collect::<Vec<Permission>>();
+                    perms2.set(updated_perms);
                 }
-            });
-        }
-    })
-};
 
+                // Now do the API call in the background
+                spawn_local(async move {
+                    let res = if is_removing {
+                        // DELETE permission
+                        fetch_empty(
+                            Method::DELETE,
+                            &format!("/roles/{}/permissions/{}", rid, pid),
+                            None::<&()>
+                        )
+                        .await
+                    } else {
+                        // POST to add permission
+                        let body = serde_json::json!({
+                            "permission_id": pid,
+                        });
+                        fetch_empty(
+                            Method::POST,
+                            &format!("/roles/{}/permissions", rid),
+                            Some(&body),
+                        )
+                        .await
+                    };
+                    
+                    // If API call failed, refresh from server to sync
+                    if res.is_err() {
+                        if let Ok(new_list) = fetch_json::<(), Vec<Permission>>(
+                            Method::GET,
+                            &format!("/roles/{}/permissions", rid),
+                            None::<&()>, 
+                        )
+                        .await
+                        {
+                            perms2.set(new_list);
+                        }
+                    }
+                });
+            }
+        })
+    };
 
     /* --- update des default policies --------------------------------- */
     let on_update_dp = {
@@ -219,7 +250,7 @@ pub fn manage_roles() -> Html {
                 let rid  = r.role_id;
                 let body = (*dp).clone();
                 spawn_local(async move {
-                    let _ = fetch_empty(Method::PUT, &format!("/roles/default_policies/{rid}"), Some(&body)).await;
+                    let _ = fetch_empty(Method::PUT, &format!("/roles/default_policies/{}", rid), Some(&body)).await;
                 });
             }
         })
@@ -286,79 +317,6 @@ pub fn manage_roles() -> Html {
         })
     };
 
-    /* --- toggle permission ------------------------------------------ */
-/* --- toggle permission ------------------------------------------ */
-let on_toggle_perm = {
-    let sel   = selected_role.clone();
-    let perms = permissions.clone();
-
-    Callback::from(move |perm: Permission| {
-        if let Some(r) = &*sel {
-            let rid    = r.role_id;
-            let pid    = perm.permission_id;
-            let perms2 = perms.clone();
-            
-            // Check if we're adding or removing
-            let is_removing = perms2.iter().any(|p| p.permission_id == pid);
-            
-            // IMPORTANT: Do immediate UI update before API call
-            if !is_removing {
-                // Adding - immediately update UI
-                let mut updated_perms = (*perms2).clone();
-                updated_perms.push(Permission {
-                    permission_id: pid,
-                    permission_name: perm.permission_name.clone(),
-                });
-                perms2.set(updated_perms);
-            } else {
-                // Removing - immediately update UI
-                let updated_perms = perms2.iter()
-                    .filter(|p| p.permission_id != pid)
-                    .cloned()
-                    .collect::<Vec<Permission>>();
-                perms2.set(updated_perms);
-            }
-
-            // Now do the API call in the background
-            spawn_local(async move {
-                let res = if is_removing {
-                    // DELETE permission
-                    fetch_empty(
-                        Method::DELETE,
-                        &format!("/roles/{rid}/permissions/{pid}"),
-                        None::<&()>
-                    )
-                    .await
-                } else {
-                    // POST to add permission
-                    let body = serde_json::json!({
-                        "permission_id": pid,
-                    });
-                    fetch_json::<_, ()>(
-                        Method::POST,
-                        &format!("/roles/{rid}/permissions"),
-                        Some(&body),
-                    )
-                    .await
-                };
-                
-                // If API call failed, refresh from server to sync
-                if res.is_err() {
-                    if let Ok(new_list) = fetch_json::<(), Vec<Permission>>(
-                        Method::GET,
-                        &format!("/roles/{rid}/permissions"),
-                        None::<&()>, 
-                    )
-                    .await
-                    {
-                        perms2.set(new_list);
-                    }
-                }
-            });
-        }
-    })
-};
-
     /* ------------------------------------------------------------------ */
     /*                               UI                                   */
     /* ------------------------------------------------------------------ */
@@ -375,8 +333,10 @@ let on_toggle_perm = {
                         let active = selected_role.as_ref().map(|x| x.role_id) == Some(r.role_id);
                         html!{
                             <li
-                                style="padding: 0.75rem; border-bottom: 1px solid #ddd; cursor: pointer; transition: background-color 0.3s, padding-left 0.3s;"
-                                class={ if active { "selected-config" } else { "" } }
+                                style={format!(
+                                    "padding: 0.75rem; border-bottom: 1px solid #ddd; cursor: pointer; transition: background-color 0.3s, padding-left 0.3s; {}",
+                                    if active { "background-color: #f0f4ff; padding-left: 1rem;" } else { "" }
+                                )}
                                 onclick={Callback::from(move |_| cb.emit(role.clone()))}
                             >
                                 { &r.role_name }
@@ -415,24 +375,24 @@ let on_toggle_perm = {
 
                                 /* ---- Permissions ---- */
                                 <h4 style="font-weight: 500; margin-top: 2rem; margin-bottom: 0.75rem; border-bottom: 1px solid #eee; padding-bottom: 0.5rem;">{ "Permissions" }</h4>
-                                <ul style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; padding: 0;">
-                                    { for all_permissions().into_iter().map(|perm| {
-                                        let toggle      = on_toggle_perm.clone();
-                                        let assigned    = permissions.iter().any(|p| p.permission_id == perm.permission_id);
+                                <ul style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; padding: 0; list-style: none;">
+                                    { for all_perms.iter().map(|perm| {
+                                        let toggle = on_toggle_perm.clone();
+                                        let assigned = permissions.iter().any(|p| p.permission_id == perm.permission_id);
 
-                                        let view_label  = perm.permission_name.clone();
-                                        let cb_perm     = perm.clone();
+                                        let view_label = perm.permission_name.clone();
+                                        let cb_perm = perm.clone();
 
                                         html!{
                                             <li
-                                                style="
-                                                    padding: 0.5rem 1rem;
-                                                    border-radius: 4px;
-                                                    transition: background-color 0.3s ease, transform 0.3s ease;
-                                                    margin: 0;
-                                                    border: none;
-                                                "
-                                                class={ if assigned { "assigned-permission" } else { "unassigned-permission" } }
+                                                style={format!(
+                                                    "padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; transition: all 0.2s ease; {}",
+                                                    if assigned {
+                                                        "background-color: #4caf50; color: white; font-weight: 500;"
+                                                    } else {
+                                                        "background-color: #f5f5f5; color: #555; border: 1px solid #ddd;"
+                                                    }
+                                                )}
                                                 onclick={Callback::from(move |_| toggle.emit(cb_perm.clone()))}
                                             >
                                                 { view_label }
@@ -739,6 +699,32 @@ let on_toggle_perm = {
                 </div>
             </div>
         </div>
+        
+        <style>
+            {r#"
+            .form-group {
+                margin-bottom: 1rem;
+            }
+            .form-group label {
+                display: block;
+                margin-bottom: 0.5rem;
+                font-weight: 500;
+                color: #333;
+            }
+            .columns {
+                display: grid;
+                grid-template-columns: 1fr 2fr 1fr;
+                gap: 1.5rem;
+            }
+            .column {
+                background-color: #fff;
+                border-radius: 4px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                padding: 1.5rem;
+                height: fit-content;
+            }
+            "#}
+        </style>
     </div>
 }
 }

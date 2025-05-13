@@ -7,6 +7,16 @@ use crate::admin::Needs;
 use crate::admin::jwt::MANAGE_RULES;
 use crate::admin::csrf::Csrf;
 
+// ---------------- roles -----------------------------------
+
+#[get("/roles")]
+async fn roles(state: web::Data<AppState>) -> HttpResponse {
+    match db::list_roles(&state.db) {
+        Ok(v)  => HttpResponse::Ok().json(v),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
 // ---------------- app_policy -----------------------------------
 
 #[get("/envs")]
@@ -109,6 +119,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("/rules")
         .wrap(Csrf)
         .wrap(Needs(MANAGE_RULES))
+        .service(roles)
         .service(envs)
         .service(env_by_name)
         .service(env_by_id)

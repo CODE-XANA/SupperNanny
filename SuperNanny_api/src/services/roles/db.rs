@@ -6,6 +6,7 @@ use diesel::{
     result::{DatabaseErrorKind, Error as DbErr},
 };
 use crate::{schema, state::DbPool};
+use anyhow::Result as AnyResult;
 
 type Conn = PooledConnection<ConnectionManager<PgConnection>>;
 
@@ -178,4 +179,9 @@ pub fn list_permissions(pool: &DbPool, rid: i32) -> Result<Vec<Permission>, DbEr
         .filter(schema::role_permissions::role_id.eq(rid))
         .select((schema::permissions::permission_id, schema::permissions::permission_name))
         .load::<Permission>(&mut c)
+}
+
+pub fn list_all_permissions(pool: &DbPool) -> AnyResult<Vec<Permission>> {
+    use crate::schema::permissions::dsl::*;
+    Ok(permissions.load::<Permission>(&mut conn(pool)?)?)
 }

@@ -34,7 +34,7 @@ async fn main() -> std::io::Result<()> {
 
     // -------- port HTTPS configurable ------------------------------------------
     let https_port: u16 = env::var("HTTPS_PORT")
-        .unwrap_or_else(|_| "8443".into())
+        .unwrap_or_else(|_| "9443".into())
         .parse()
         .expect("HTTPS_PORT must be a number");
 

@@ -3,9 +3,26 @@ use chrono::NaiveDateTime;
 use diesel::prelude::*;
 
 use crate::{
-    schema::{default_policies, app_policy},
+    schema::{default_policies, app_policy, roles},
     state::DbPool,
 };
+
+
+/// ---- rôle simple -------------------------------------------------------
+
+#[derive(Queryable, serde::Serialize)]
+#[diesel(table_name = roles, primary_key(role_id))]
+pub struct Role {
+    pub role_id:   i32,
+    pub role_name: String,
+}
+
+/// Liste tous les rôles
+pub fn list_roles(pool: &DbPool) -> Result<Vec<Role>> {
+    let mut conn = pool.get()?;
+    Ok(roles::table.load::<Role>(&mut conn)?)
+}
+
 
 // ---------------- default_policies ----------------------------------------
 

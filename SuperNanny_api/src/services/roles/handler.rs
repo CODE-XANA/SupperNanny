@@ -126,6 +126,14 @@ async fn create_with_default(
 
 /* ---- permissions -------------------------------- */
 
+#[get("/permissions")]
+async fn all_permissions(state: web::Data<AppState>) -> HttpResponse {
+    match roles_db::list_all_permissions(&state.db) {
+        Ok(v)  => HttpResponse::Ok().json(v),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
 // GET  /roles/{rid}/permissions
 #[get("/{rid}/permissions")]
 async fn list_permissions(
@@ -191,6 +199,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             // one-shot rôle + policies
             .service(create_with_default)
             // permissions
+            .service(all_permissions)
             .service(list_permissions)
             .service(add_permission)
             .service(remove_permission)
