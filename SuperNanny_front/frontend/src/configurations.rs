@@ -30,7 +30,7 @@ pub struct AppPolicy {
     tcp_connect: String,
     allowed_ips: String,
     allowed_domains: String,
-    updated_at: String, // NaiveDateTime → string côté back
+    updated_at: String,
 }
 
 /* -------------------------------------------------------------------------- */
@@ -60,19 +60,6 @@ struct UpdateEnvPayload {
     allowed_domains: String,
 }
 
-// Updated field names to match what the backend expects
-#[derive(Serialize, Debug)]
-struct CreateEnvPayload {
-    app_name:       String,
-    role_id:        i32,
-    default_ro:     String,
-    default_rw:     String,
-    tcp_bind:       String,
-    tcp_connect:    String,
-    allowed_ips:    String,
-    allowed_domains:String,
-}
-
 /* -------------------------------------------------------------------------- */
 /*                         composant Configurations                           */
 /* -------------------------------------------------------------------------- */
@@ -85,7 +72,7 @@ pub fn configurations() -> Html {
     let selected_role = use_state(|| -1);
     let selected_env = use_state(|| None::<AppPolicy>);
 
-    /* form – création */
+    /* form - création */
     let f_app = use_state(String::new);
     let f_ro = use_state(String::new);
     let f_rw = use_state(String::new);
@@ -146,7 +133,7 @@ pub fn configurations() -> Html {
             let sel: HtmlSelectElement = e.target_unchecked_into();
             let role_id = sel.value().parse().unwrap_or(-1);
             sel_role.set(role_id);
-            sel_env.set(None); // Reset selected environment when role changes
+            sel_env.set(None);
         })
     };
 
@@ -220,66 +207,58 @@ pub fn configurations() -> Html {
         })
     };
 
-// ------------------------------------------------------------------
-// 9) Supprimer la config sélectionnée avec confirmation
-// ------------------------------------------------------------------
-let on_delete_env = {
-    let envs_state         = envs.clone();        // liste dans la colonne de gauche
-    let selected_env_state = selected_env.clone(); // détail au centre
+    // ------------------------------------------------------------------
+    // 9) Supprimer la config sélectionnée avec confirmation
+    // ------------------------------------------------------------------
 
-    Callback::from(move |_| {
-        if let Some(env) = (*selected_env_state).clone() {
-            if !confirm("Confirmer la suppression de cette configuration ?") {
-                return;
-            }
+    let on_delete_env = {
+        let envs_state = envs.clone();
+        let selected_env_state = selected_env.clone();
 
-            let pid                 = env.policy_id;
-            let envs_after_delete   = envs_state.clone();
-            let selected_env_clear  = selected_env_state.clone();
-
-            spawn_local(async move {
-                // DELETE /rules/env_id/{pid}
-                let path = format!("/rules/env_id/{pid}");
-                match fetch_empty(Method::DELETE, &path, None::<&()>).await {
-                    Ok(_) => {
-                        // 1) retrait immédiat de la liste
-                        envs_after_delete.set(
-                            envs_after_delete
-                                .iter()
-                                .filter(|p| p.policy_id != pid)
-                                .cloned()
-                                .collect::<Vec<_>>()
-                        );
-                        // 2) panneau central vidé
-                        selected_env_clear.set(None);
-                        info!("Suppression réussie");
-                    }
-                    Err(e) => error!("Suppression KO : {:?}", e),
+        Callback::from(move |_| {
+            if let Some(env) = (*selected_env_state).clone() {
+                if !confirm("Confirmer la suppression de cette configuration ?") {
+                    return;
                 }
-            });
-        }
-    })
-};
 
-// ------------------------------------------------------------------
-// 10) Créer une nouvelle config (POST /rules/env → GET /rules/env/{app})
-// ------------------------------------------------------------------
-let on_create_env = {
-    // handles qu’on va capturer
-    let envs_state   = envs.clone();
-    let sel_env      = selected_env.clone();
-    let role_id_st   = selected_role.clone();
+                let pid                 = env.policy_id;
+                let envs_after_delete   = envs_state.clone();
+                let selected_env_clear  = selected_env_state.clone();
 
-    let f_app  = f_app.clone();
-    let f_ro   = f_ro.clone();
-    let f_rw   = f_rw.clone();
-    let f_bind = f_bind.clone();
-    let f_conn = f_conn.clone();
-    let f_ips  = f_ips.clone();
-    let f_dom  = f_dom.clone();
+                spawn_local(async move {
+                    // DELETE /rules/env_id/{pid}
+                    let path = format!("/rules/env_id/{pid}");
+                    match fetch_empty(Method::DELETE, &path, None::<&()>).await {
+                        Ok(_) => {
+                            // 1) retrait immédiat de la liste
+                            envs_after_delete.set(
+                                envs_after_delete
+                                    .iter()
+                                    .filter(|p| p.policy_id != pid)
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                            );
+                            // 2) panneau central vidé
+                            selected_env_clear.set(None);
+                            info!("Suppression réussie");
+                        }
+                        Err(e) => error!("Suppression KO : {:?}", e),
+                    }
+                });
+            }
+        })
+    };
 
-    // remise à zéro du formulaire
-    let reset_form = {
+    // ------------------------------------------------------------------
+    // 10) Créer une nouvelle config (POST /rules/env → GET /rules/env/{app})
+    // ------------------------------------------------------------------
+
+    let on_create_env = {
+        // handles qu’on va capturer
+        let envs_state   = envs.clone();
+        let sel_env      = selected_env.clone();
+        let role_id_st   = selected_role.clone();
+
         let f_app  = f_app.clone();
         let f_ro   = f_ro.clone();
         let f_rw   = f_rw.clone();
@@ -287,74 +266,84 @@ let on_create_env = {
         let f_conn = f_conn.clone();
         let f_ips  = f_ips.clone();
         let f_dom  = f_dom.clone();
-        move || {
-            f_app.set(String::new());
-            f_ro.set(String::new());
-            f_rw.set(String::new());
-            f_bind.set(String::new());
-            f_conn.set(String::new());
-            f_ips.set(String::new());
-            f_dom.set(String::new());
-        }
-    };
 
-    Callback::from(move |_| {
-        let rid = *role_id_st;
-        if rid == -1 {
-            error!("Sélectionnez d’abord un rôle");
-            return;
-        }
+        // remise à zéro du formulaire
+        let reset_form = {
+            let f_app  = f_app.clone();
+            let f_ro   = f_ro.clone();
+            let f_rw   = f_rw.clone();
+            let f_bind = f_bind.clone();
+            let f_conn = f_conn.clone();
+            let f_ips  = f_ips.clone();
+            let f_dom  = f_dom.clone();
+            move || {
+                f_app.set(String::new());
+                f_ro.set(String::new());
+                f_rw.set(String::new());
+                f_bind.set(String::new());
+                f_conn.set(String::new());
+                f_ips.set(String::new());
+                f_dom.set(String::new());
+            }
+        };
 
-        // on clone les valeurs pour pouvoir les bouger dans l’async
-        let app  = (*f_app).clone();
-        if app.trim().is_empty() {
-            error!("Le nom de l’application est requis");
-            return;
-        }
-
-        let payload = serde_json::json!({
-            "app_name":        app,
-            "role_id":         rid,
-            "default_ro":      (*f_ro).clone(),
-            "default_rw":      (*f_rw).clone(),
-            "tcp_bind":        (*f_bind).clone(),
-            "tcp_connect":     (*f_conn).clone(),
-            "allowed_ips":     (*f_ips).clone(),
-            "allowed_domains": (*f_dom).clone(),
-        });
-
-        let envs_after = envs_state.clone();
-        let sel_env2   = sel_env.clone();
-        let reset      = reset_form.clone();
-
-        spawn_local(async move {
-            // 1) POST sans attendre de JSON
-            if let Err(e) = fetch_empty(Method::POST, "/rules/env", Some(&payload)).await {
-                error!("Création KO : {e:?}");
+        Callback::from(move |_| {
+            let rid = *role_id_st;
+            if rid == -1 {
+                error!("Sélectionnez d’abord un rôle");
                 return;
             }
 
-            // 2) GET /rules/env/{app_name} pour récupérer la conf complète
-            let path = format!("/rules/env/{app}");
-            match fetch_json::<(), AppPolicy>(Method::GET, &path, None::<&()>).await {
-                Err(e)        => error!("Impossible de récupérer la config créée : {e:?}"),
-                Ok(new_env) => {
-                    // 2.a) l’insère dans la liste
-                    let mut list = (*envs_after).clone();
-                    list.push(new_env.clone());
-                    envs_after.set(list);
-
-                    // 2.b) l’affiche dans la colonne centrale
-                    sel_env2.set(Some(new_env));
-
-                    // 3) nettoie le formulaire
-                    reset();
-                    info!("Création OK");
-                }
+            // on clone les valeurs pour pouvoir les bouger dans l’async
+            let app  = (*f_app).clone();
+            if app.trim().is_empty() {
+                error!("Le nom de l’application est requis");
+                return;
             }
-        });
-    })
-};
+
+            let payload = serde_json::json!({
+                "app_name":        app,
+                "role_id":         rid,
+                "default_ro":      (*f_ro).clone(),
+                "default_rw":      (*f_rw).clone(),
+                "tcp_bind":        (*f_bind).clone(),
+                "tcp_connect":     (*f_conn).clone(),
+                "allowed_ips":     (*f_ips).clone(),
+                "allowed_domains": (*f_dom).clone(),
+            });
+
+            let envs_after = envs_state.clone();
+            let sel_env2   = sel_env.clone();
+            let reset      = reset_form.clone();
+
+            spawn_local(async move {
+                // 1) POST sans attendre de JSON
+                if let Err(e) = fetch_empty(Method::POST, "/rules/env", Some(&payload)).await {
+                    error!("Création KO : {e:?}");
+                    return;
+                }
+
+                // 2) GET /rules/env/{app_name} pour récupérer la conf complète
+                let path = format!("/rules/env/{app}");
+                match fetch_json::<(), AppPolicy>(Method::GET, &path, None::<&()>).await {
+                    Err(e)        => error!("Impossible de récupérer la config créée : {e:?}"),
+                    Ok(new_env) => {
+                        // 2.a) l’insère dans la liste
+                        let mut list = (*envs_after).clone();
+                        list.push(new_env.clone());
+                        envs_after.set(list);
+
+                        // 2.b) l’affiche dans la colonne centrale
+                        sel_env2.set(Some(new_env));
+
+                        // 3) nettoie le formulaire
+                        reset();
+                        info!("Création OK");
+                    }
+                }
+            });
+        })
+    };
 
     /* ----------- helpers input binding -------------------------------- */
     let bind_input = |st: UseStateHandle<String>| {
@@ -386,6 +375,7 @@ let on_create_env = {
     /* ------------------------------------------------------------------ */
     /* UI                                                                 */
     /* ------------------------------------------------------------------ */
+
     html! {
         <div class="container">
             <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 600; color: #2c3e50;">{"Gestion des Configurations"}</h2>
@@ -459,7 +449,7 @@ let on_create_env = {
                     }
                 </div>
 
-                // Colonne 2: Détails / Édition
+                // Colonne 2 : Détails / Édition
                 <div style="flex: 1.5; background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 10px rgba(0,0,0,0.05); position: relative;">
                     {
                         if let Some(env) = &*selected_env {
@@ -640,7 +630,7 @@ let on_create_env = {
                     }
                 </div>
 
-                // Colonne 3: Création
+                // Colonne 3 : Création
                 <div style="flex: 1.5; background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 10px rgba(0,0,0,0.05);">
                     <h3 style="font-size: 1.1rem; margin-bottom: 1rem; font-weight: 500; border-bottom: 1px solid #eee; padding-bottom: 0.75rem;">{"Nouvelle Configuration"}</h3>
                     <p style="font-size: 0.8rem; color: #888; margin-bottom: 1.5rem;">

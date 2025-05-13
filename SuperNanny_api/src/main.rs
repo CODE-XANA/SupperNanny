@@ -7,7 +7,6 @@ mod middleware;
 mod tls;
 
 use actix_cors::Cors;
-use actix_web::http::header;
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use diesel::r2d2::{self, ConnectionManager};
 use diesel::PgConnection;

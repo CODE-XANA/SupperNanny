@@ -198,10 +198,8 @@ pub fn manage_users() -> Html {
                 .confirm_with_message("Confirmer la suppression ?")
                 .unwrap_or(false)
             {
-                // appelle ton nouveau fetch_empty
                 match fetch_empty(Method::DELETE,&format!("/users/{uid}"), None::<&()> ).await {
                     Ok(()) => {
-                        // dès que c'est OK, recharge tout
                         reload_all_data(roles, users, uroles).await;
                     }
                     Err(e) => error!("Suppression échouée : {e:?}"),
@@ -228,7 +226,7 @@ pub fn manage_users() -> Html {
                                 justify-content: space-between;
                                 align-items: center;
                             ">
-                                // Texte username → rôle
+                                // Texte username -> rôle
                                 <span>
                                 <b>{ &u.username }</b>
                                 <span style="margin: 0 0.5rem;">{"→"}</span>

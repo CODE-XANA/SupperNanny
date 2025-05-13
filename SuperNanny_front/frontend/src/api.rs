@@ -63,7 +63,7 @@ where
 pub async fn fetch_empty<T>(
     method: Method,
     path:   &str,
-    body:   Option<&T>,                     // ← 3ᵉ paramètre facultatif
+    body:   Option<&T>, 
 ) -> Result<(), Error>
 where
     T: Serialize + ?Sized,
@@ -81,7 +81,7 @@ where
         req = req.header("X-CSRF-Token", &csrf);
     }
 
-    // PUT / POST → éventuel body JSON
+    // PUT / POST -> éventuel body JSON
     let resp = match (method, body) {
         (Method::PUT | Method::POST, Some(b)) => req.json(b)?.send().await?,
         _                                     => req.send().await?,
@@ -90,7 +90,6 @@ where
     match resp.status() {
         200 | 204 => Ok(()),
         s => {
-            // gloo‑net n’a **pas** de variant `Error::Response` : on encapsule tout
             let msg = format!("HTTP {} – {}", s, resp.status_text());
             Err(Error::JsError(js_sys::Error::new(&msg).into()))
         }

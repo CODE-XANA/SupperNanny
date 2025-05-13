@@ -51,7 +51,7 @@ pub fn manage_roles() -> Html {
     let selected_role  = use_state(|| None::<Role>);
     let permissions    = use_state(Vec::<Permission>::new);
     let dp_state       = use_state(DefaultPolicyData::default);
-    let all_perms      = use_state(Vec::<Permission>::new); // Toutes les permissions disponibles
+    let all_perms      = use_state(Vec::<Permission>::new);
 
     /* -------- states création -------- */
     let new_role_name  = use_state(String::new);
@@ -89,7 +89,7 @@ pub fn manage_roles() -> Html {
     }
 
     /* ------------------------------------------------------------------ */
-    /* 2. lorsqu'on (dé)sélectionne un rôle → charge perms & policies      */
+    /* 2. lorsqu'on (dé)sélectionne un rôle -> charge perms & policies      */
     /* ------------------------------------------------------------------ */
     {
         let perms = permissions.clone();
@@ -118,7 +118,7 @@ pub fn manage_roles() -> Html {
                     let path = format!("/roles/default_policies/{}", rid);
                     match fetch_json::<(), DefaultPolicyData>(Method::GET, &path, None::<&()>).await {
                         Ok(d)  => dp_handle.set(d),
-                        Err(_) => dp_handle.set(DefaultPolicyData::default()), // Aucun encore
+                        Err(_) => dp_handle.set(DefaultPolicyData::default()),
                     }
                 });
             } else {
@@ -184,7 +184,6 @@ pub fn manage_roles() -> Html {
                 
                 // IMPORTANT: Do immediate UI update before API call
                 if !is_removing {
-                    // Adding - immediately update UI
                     let mut updated_perms = (*perms2).clone();
                     updated_perms.push(Permission {
                         permission_id: pid,
@@ -192,7 +191,6 @@ pub fn manage_roles() -> Html {
                     });
                     perms2.set(updated_perms);
                 } else {
-                    // Removing - immediately update UI
                     let updated_perms = perms2.iter()
                         .filter(|p| p.permission_id != pid)
                         .cloned()
@@ -320,6 +318,7 @@ pub fn manage_roles() -> Html {
     /* ------------------------------------------------------------------ */
     /*                               UI                                   */
     /* ------------------------------------------------------------------ */
+    
     html! {
     <div class="container">
         <div class="columns">

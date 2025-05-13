@@ -6,7 +6,6 @@ mod auth;           // formulaire Login
 mod session;        // SessionProvider + use_session
 mod guard;          // Guard need="perm"
 mod logout;         // bouton Déconnexion
-mod utils;          // (si tu en as encore besoin)
 
 mod dashboard;
 mod configurations;

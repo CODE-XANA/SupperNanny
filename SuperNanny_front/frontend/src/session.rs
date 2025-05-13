@@ -34,9 +34,9 @@ pub fn session_provider(props: &SessionProviderProps) -> Html {
 
     {
         let session = session.clone();
-        use_effect_with(                 // deps d'abord
-            (),                          // aucune dépendance
-            move |_| {                   // closure reçoit ()
+        use_effect_with(
+            (),
+            move |_| {
                 spawn_local(async move {
                     let resp = fetch_json::<(), Session>(Method::GET, "/admin/me", None::<&()>).await;
                     session.set(resp.ok());
