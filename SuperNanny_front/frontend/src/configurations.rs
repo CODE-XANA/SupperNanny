@@ -6,7 +6,8 @@ use web_sys::{HtmlInputElement, HtmlSelectElement, InputEvent};
 use yew::platform::spawn_local;
 use yew::prelude::*;
 
-use crate::api::fetch_json;
+use crate::api::{fetch_json, fetch_empty};
+
 
 /* -------------------------------------------------------------------------- */
 /*                                structures                                  */
@@ -30,17 +31,6 @@ pub struct AppPolicy {
     allowed_ips: String,
     allowed_domains: String,
     updated_at: String, // NaiveDateTime → string côté back
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
-pub struct SandboxEvent {
-    event_id: i32,
-    timestamp: String,
-    hostname: String,
-    app_name: String,
-    denied_path: Option<String>,
-    operation: String,
-    result: String,
 }
 
 /* -------------------------------------------------------------------------- */
@@ -94,8 +84,6 @@ pub fn configurations() -> Html {
     let envs = use_state(Vec::<AppPolicy>::new);
     let selected_role = use_state(|| -1);
     let selected_env = use_state(|| None::<AppPolicy>);
-    let events = use_state(Vec::<SandboxEvent>::new);
-    let view_mode = use_state(|| "edit".to_string()); // "edit" or "events"
 
     /* form – création */
     let f_app = use_state(String::new);
@@ -149,28 +137,6 @@ pub fn configurations() -> Html {
     };
 
     /* ------------------------------------------------------------------ */
-    /* 4) charge les events quand selected_env change                      */
-    /* ------------------------------------------------------------------ */
-    {
-        let ev_state = events.clone();
-        use_effect_with(selected_env.clone(), move |env_opt| {
-            if let Some(env) = &**env_opt {
-                let path = format!("/logs/events/{}", env.app_name);
-                let ev_state = ev_state.clone();
-                spawn_local(async move {
-                    match fetch_json::<(), Vec<SandboxEvent>>(Method::GET, &path, None::<&()>).await {
-                        Ok(v) => ev_state.set(v),
-                        Err(e) => error!("Error fetching events: {:?}", e),
-                    }
-                });
-            } else {
-                ev_state.set(Vec::new());
-            }
-            || ()
-        });
-    }
-
-    /* ------------------------------------------------------------------ */
     /* 5) handlers UI                                                     */
     /* ------------------------------------------------------------------ */
     let on_role_change = {
@@ -186,10 +152,8 @@ pub fn configurations() -> Html {
 
     let on_select_env = {
         let sel_env = selected_env.clone();
-        let view_mode_state = view_mode.clone();
         Callback::from(move |pid: i32| {
             let sel_env = sel_env.clone();
-            view_mode_state.set("edit".to_string()); // Reset to edit mode when selecting a new env
             spawn_local(async move {
                 let path = format!("/rules/env_id/{pid}");
                 match fetch_json::<(), AppPolicy>(Method::GET, &path, None::<&()>).await {
@@ -225,18 +189,29 @@ pub fn configurations() -> Html {
                     match fetch_json::<_, ()>(Method::PUT, &path, Some(&body)).await {
                         Ok(_) => {
                             info!("Configuration updated successfully");
-                            // Refresh list
-                            match fetch_json::<(), Vec<AppPolicy>>(Method::GET, "/rules/envs", None::<&()>).await {
-                                Ok(v) => {
-                                    envs_st2.set(v);
-                                    // Keep the updated version
-                                    match fetch_json::<(), AppPolicy>(Method::GET, &path, None::<&()>).await {
-                                        Ok(new_env) => sel_env2.set(Some(new_env)),
-                                        Err(e) => error!("Error refreshing env details: {:?}", e),
-                                    }
-                                },
-                                Err(e) => error!("Error refreshing envs list: {:?}", e),
+                            // Immediately update the local env
+                            let updated_env = AppPolicy {
+                                default_ro: body.ll_fs_ro.clone(),
+                                default_rw: body.ll_fs_rw.clone(),
+                                tcp_bind: body.ll_tcp_bind.clone(),
+                                tcp_connect: body.ll_tcp_connect.clone(),
+                                allowed_ips: body.allowed_ips.clone(),
+                                allowed_domains: body.allowed_domains.clone(),
+                                ..env.clone()
+                            };
+                            
+                            // Update the list
+                            let mut updated_envs = (*envs_st2).clone();
+                            for e in &mut updated_envs {
+                                if e.policy_id == env.policy_id {
+                                    *e = updated_env.clone();
+                                    break;
+                                }
                             }
+                            envs_st2.set(updated_envs);
+                            
+                            // Update selected env
+                            sel_env2.set(Some(updated_env));
                         },
                         Err(e) => error!("Update failed: {:?}", e),
                     }
@@ -245,142 +220,141 @@ pub fn configurations() -> Html {
         })
     };
 
-    /* ----------- suppression ------------------------------------------ */
-    let on_delete_env = {
-        let sel_env = selected_env.clone();
-        let envs_st = envs.clone();
-        Callback::from(move |_| {
-            if let Some(env) = (*sel_env).clone() {
-                if confirm("Êtes-vous sûr de vouloir supprimer cette configuration ?") {
-                    let path = format!("/rules/env_id/{}", env.policy_id);
-                    let sel_env2 = sel_env.clone();
-                    let envs_st2 = envs_st.clone();
-                    spawn_local(async move {
-                        match fetch_json::<(), ()>(Method::DELETE, &path, None::<&()>).await {
-                            Ok(_) => {
-                                info!("Configuration deleted successfully");
-                                sel_env2.set(None);
-                                match fetch_json::<(), Vec<AppPolicy>>(Method::GET, "/rules/envs", None::<&()>).await {
-                                    Ok(v) => envs_st2.set(v),
-                                    Err(e) => error!("Error refreshing envs list: {:?}", e),
-                                }
-                            },
-                            Err(e) => error!("Delete failed: {:?}", e),
-                        }
-                    });
-                }
+// ------------------------------------------------------------------
+// 9) Supprimer la config sélectionnée avec confirmation
+// ------------------------------------------------------------------
+let on_delete_env = {
+    let envs_state         = envs.clone();        // liste dans la colonne de gauche
+    let selected_env_state = selected_env.clone(); // détail au centre
+
+    Callback::from(move |_| {
+        if let Some(env) = (*selected_env_state).clone() {
+            if !confirm("Confirmer la suppression de cette configuration ?") {
+                return;
             }
-        })
-    };
 
-    // -------------------- création d’une nouvelle configuration ---------------
+            let pid                 = env.policy_id;
+            let envs_after_delete   = envs_state.clone();
+            let selected_env_clear  = selected_env_state.clone();
+
+            spawn_local(async move {
+                // DELETE /rules/env_id/{pid}
+                let path = format!("/rules/env_id/{pid}");
+                match fetch_empty(Method::DELETE, &path, None::<&()>).await {
+                    Ok(_) => {
+                        // 1) retrait immédiat de la liste
+                        envs_after_delete.set(
+                            envs_after_delete
+                                .iter()
+                                .filter(|p| p.policy_id != pid)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        );
+                        // 2) panneau central vidé
+                        selected_env_clear.set(None);
+                        info!("Suppression réussie");
+                    }
+                    Err(e) => error!("Suppression KO : {:?}", e),
+                }
+            });
+        }
+    })
+};
+
+// ------------------------------------------------------------------
+// 10) Créer une nouvelle config (POST /rules/env → GET /rules/env/{app})
+// ------------------------------------------------------------------
 let on_create_env = {
-    // --- states à cloner pour qu’ils vivent dans le callback ---------------
-    let envs_st    = envs.clone();          // liste affichée dans la colonne de gauche
-    let sel_env    = selected_env.clone();  // env actuellement ouverte au centre
-    let rid_st     = selected_role.clone(); // rôle sélectionné
+    // handles qu’on va capturer
+    let envs_state   = envs.clone();
+    let sel_env      = selected_env.clone();
+    let role_id_st   = selected_role.clone();
 
-    // champs du formulaire
-    let n_app  = f_app.clone();
-    let n_ro   = f_ro.clone();
-    let n_rw   = f_rw.clone();
-    let n_bind = f_bind.clone();
-    let n_conn = f_conn.clone();
-    let n_ips  = f_ips.clone();
-    let n_dom  = f_dom.clone();
+    let f_app  = f_app.clone();
+    let f_ro   = f_ro.clone();
+    let f_rw   = f_rw.clone();
+    let f_bind = f_bind.clone();
+    let f_conn = f_conn.clone();
+    let f_ips  = f_ips.clone();
+    let f_dom  = f_dom.clone();
 
-    // --- petit helper pour vider le formulaire après succès ---------------
+    // remise à zéro du formulaire
     let reset_form = {
-        let app  = f_app.clone();
-        let ro   = f_ro.clone();
-        let rw   = f_rw.clone();
-        let bind = f_bind.clone();
-        let conn = f_conn.clone();
-        let ips  = f_ips.clone();
-        let dom  = f_dom.clone();
-
+        let f_app  = f_app.clone();
+        let f_ro   = f_ro.clone();
+        let f_rw   = f_rw.clone();
+        let f_bind = f_bind.clone();
+        let f_conn = f_conn.clone();
+        let f_ips  = f_ips.clone();
+        let f_dom  = f_dom.clone();
         move || {
-            app.set(String::new());
-            ro.set(String::new());
-            rw.set(String::new());
-            bind.set(String::new());
-            conn.set(String::new());
-            ips.set(String::new());
-            dom.set(String::new());
+            f_app.set(String::new());
+            f_ro.set(String::new());
+            f_rw.set(String::new());
+            f_bind.set(String::new());
+            f_conn.set(String::new());
+            f_ips.set(String::new());
+            f_dom.set(String::new());
         }
     };
 
-    // --------------------------- callback UI ------------------------------
     Callback::from(move |_| {
-        let rid = *rid_st;
+        let rid = *role_id_st;
         if rid == -1 {
-            error!("Veuillez d’abord sélectionner un rôle");
+            error!("Sélectionnez d’abord un rôle");
             return;
         }
-        if n_app.is_empty() {
+
+        // on clone les valeurs pour pouvoir les bouger dans l’async
+        let app  = (*f_app).clone();
+        if app.trim().is_empty() {
             error!("Le nom de l’application est requis");
             return;
         }
 
-        // payload que le back / POST /rules/env attend
-        let body = CreateEnvPayload {
-            app_name:        (*n_app).clone(),
-            role_id:         rid,
-            default_ro:      (*n_ro).clone(),
-            default_rw:      (*n_rw).clone(),
-            tcp_bind:        (*n_bind).clone(),
-            tcp_connect:     (*n_conn).clone(),
-            allowed_ips:     (*n_ips).clone(),
-            allowed_domains: (*n_dom).clone(),
-        };
+        let payload = serde_json::json!({
+            "app_name":        app,
+            "role_id":         rid,
+            "default_ro":      (*f_ro).clone(),
+            "default_rw":      (*f_rw).clone(),
+            "tcp_bind":        (*f_bind).clone(),
+            "tcp_connect":     (*f_conn).clone(),
+            "allowed_ips":     (*f_ips).clone(),
+            "allowed_domains": (*f_dom).clone(),
+        });
 
-        info!("Creating environment with payload: {:?}", &body);
-
-        // clones pour l’async
-        let envs_st2 = envs_st.clone();
-        let sel_env2 = sel_env.clone();
-        let reset    = reset_form.clone();
-        let app_name = (*n_app).clone();   // pour la requête GET juste après
+        let envs_after = envs_state.clone();
+        let sel_env2   = sel_env.clone();
+        let reset      = reset_form.clone();
 
         spawn_local(async move {
-            // 1) création ---------------------------------------------------
-            match fetch_json::<_, ()>(Method::POST, "/rules/env", Some(&body)).await {
-                Err(e) => error!("Creation failed: {:?}", e),
-                Ok(_)  => {
-                    info!("Configuration created successfully");
+            // 1) POST sans attendre de JSON
+            if let Err(e) = fetch_empty(Method::POST, "/rules/env", Some(&payload)).await {
+                error!("Création KO : {e:?}");
+                return;
+            }
 
-                    // 2) récupération de la ligne nouvellement créée ----------
-                    let path = format!("/rules/env/{}", app_name);
-                    match fetch_json::<(), AppPolicy>(Method::GET, &path, None::<&()>).await {
-                        Err(e) => error!("Unable to fetch newly created env: {:?}", e),
-                        Ok(new_env) => {
-                            // 3) mise à jour instantanée du state --------------
-                            let mut list = (*envs_st2).clone();
-                            list.push(new_env.clone());
-                            envs_st2.set(list);
+            // 2) GET /rules/env/{app_name} pour récupérer la conf complète
+            let path = format!("/rules/env/{app}");
+            match fetch_json::<(), AppPolicy>(Method::GET, &path, None::<&()>).await {
+                Err(e)        => error!("Impossible de récupérer la config créée : {e:?}"),
+                Ok(new_env) => {
+                    // 2.a) l’insère dans la liste
+                    let mut list = (*envs_after).clone();
+                    list.push(new_env.clone());
+                    envs_after.set(list);
 
-                            // 4) on l’affiche aussitôt au centre --------------
-                            sel_env2.set(Some(new_env));
+                    // 2.b) l’affiche dans la colonne centrale
+                    sel_env2.set(Some(new_env));
 
-                            // 5) on vide le formulaire ------------------------
-                            reset();
-                        }
-                    }
+                    // 3) nettoie le formulaire
+                    reset();
+                    info!("Création OK");
                 }
             }
         });
     })
 };
-
-
-    /* ----------- toggle view mode ----------------------------------- */
-    let toggle_view_mode = {
-        let vm = view_mode.clone();
-        Callback::from(move |_| {
-            let current = (*vm).clone();
-            vm.set(if current == "edit" { "events".to_string() } else { "edit".to_string() });
-        })
-    };
 
     /* ----------- helpers input binding -------------------------------- */
     let bind_input = |st: UseStateHandle<String>| {
@@ -413,347 +387,444 @@ let on_create_env = {
     /* UI                                                                 */
     /* ------------------------------------------------------------------ */
     html! {
-        <div class="container mt-4">
-            <h2 class="title is-4 mb-4">{"Gestion des Configurations"}</h2>
-            
-            <div class="columns">
-                /* ----- colonne 1 : rôles et envs ----- */
-                <div class="column is-one-quarter box">
-                    <h3 class="subtitle is-5 mb-3">{ "Sélection du Rôle" }</h3>
-                    <div class="field">
-                        <div class="control">
-                            <div class="select is-fullwidth">
-                                <select onchange={on_role_change}>
-                                    <option value="-1">{ "-- Sélectionner un rôle --" }</option>
-                                    { for roles.iter().map(|r| html!{
-                                        <option value={r.role_id.to_string()}>{ &r.role_name }</option>
-                                    })}
-                                </select>
-                            </div>
-                        </div>
+        <div class="container">
+            <h2 style="margin-bottom: 2rem; font-size: 1.5rem; font-weight: 600; color: #2c3e50;">{"Gestion des Configurations"}</h2>
+            // Colonne 1
+            <div style="display: flex; gap: 1.5rem;">
+                <div style="flex: 1; background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 10px rgba(0,0,0,0.05);">
+                    <h3 style="font-size: 1.1rem; margin-bottom: 1rem; font-weight: 500; border-bottom: 1px solid #eee; padding-bottom: 0.75rem;">{"Sélection du Rôle"}</h3>
+                    <div style="margin-bottom: 1.5rem;">
+                        <select 
+                            value={selected_role.to_string()}
+                            onchange={on_role_change.clone()}
+                            style="
+                                width: 100%;
+                                padding: 0.75rem;
+                                background-color: #fff;
+                                border: 1px solid #ccc;
+                                border-radius: 4px;
+                                color: #333;
+                                box-sizing: border-box;
+                            "
+                        >
+                            <option value="-1" selected={*selected_role == -1}>
+                                {"Choisir un rôle"}
+                            </option>
+                            { for roles.iter().map(|role| html! {
+                                <option value={role.role_id.to_string()}>
+                                    { &role.role_name }
+                                </option>
+                            }) }
+                        </select>
                     </div>
 
-                    <h4 class="subtitle is-6 mt-4 mb-2">{ "Configurations" }</h4>
+                    <h4 style="font-size: 1rem; font-weight: 500; margin-top: 2rem; margin-bottom: 1rem; border-bottom: 1px solid #eee; padding-bottom: 0.5rem;">{"Configurations"}</h4>
                     {
                         if envs_filtered.is_empty() && *selected_role != -1 {
                             html! {
-                                <p class="has-text-grey">{ "Aucune configuration pour ce rôle." }</p>
+                                <p style="color: #888; text-align: center; padding: 1rem 0;">{"Aucune configuration pour ce rôle."}</p>
                             }
                         } else if *selected_role == -1 {
                             html! {
-                                <p class="has-text-grey">{ "Veuillez sélectionner un rôle." }</p>
+                                <p style="color: #888; text-align: center; padding: 1rem 0;">{"Veuillez sélectionner un rôle."}</p>
                             }
                         } else {
                             html! {
-                                <div class="menu">
-                                    <ul class="menu-list">
-                                        { for envs_filtered.iter().map(|p| {
-                                            let is_selected = selected_env.as_ref().map_or(false, |e| e.policy_id == p.policy_id);
-                                            html!{
-                                                <li
-                                                    class={if is_selected { "is-active" } else { "" }}
-                                                    onclick={{
-                                                        let cb = on_select_env.clone();
-                                                        let id = p.policy_id;
-                                                        Callback::from(move |_| cb.emit(id))
-                                                    }}
-                                                >
-                                                    { &p.app_name }
-                                                </li>
+                                <ul style="list-style: none; padding: 0; margin: 0;">
+                                    { for envs_filtered.iter().map(|p| {
+                                        let is_selected = selected_env.as_ref().map_or(false, |e| e.policy_id == p.policy_id);
+                                        html!{
+                                            <li
+                                                onclick={{
+                                                    let cb = on_select_env.clone();
+                                                    let id = p.policy_id;
+                                                    Callback::from(move |_| cb.emit(id))
+                                                }}
+                                                style={format!(
+                                                    "padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 0.5rem; cursor: pointer; transition: all 0.2s ease; {}",
+                                                    if is_selected {
+                                                        "background-color: #3f51b5; color: white; font-weight: 500;"
+                                                    } else {
+                                                        "background-color: #f5f5f5; color: #555; border: 1px solid #ddd;"
+                                                    }
+                                                )}
+                                            >
+                                                { &p.app_name }
+                                            </li>
+                                        }
+                                    })}
+                                </ul>
+                            }
+                        }
+                    }
+                </div>
 
-                                            }
-                                        })}
-                                    </ul>
+                // Colonne 2: Détails / Édition
+                <div style="flex: 1.5; background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 10px rgba(0,0,0,0.05); position: relative;">
+                    {
+                        if let Some(env) = &*selected_env {
+                            html!{
+                                <div class="role-details-container">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                        <h3 style="margin: 0; padding: 0; font-size: 1.1rem; font-weight: 500;">
+                                            { format!("{} ({})", env.app_name, role_name_of(env.role_id, &roles)) }
+                                        </h3>
+                                        <button 
+                                            onclick={on_delete_env.clone()}
+                                            style="
+                                                border: 1px solid #e74c3c;
+                                                background: transparent;
+                                                color: #e74c3c;
+                                                padding: 0.25rem 0.5rem;
+                                                font-size: 0.875rem;
+                                                border-radius: 4px;
+                                                cursor: pointer;
+                                                position: absolute;
+                                                top: 1rem;
+                                                right: 1rem;
+                                            "
+                                        >
+                                            { "Supprimer" }
+                                        </button>
+                                    </div>
+                                    <p style="font-size: 0.8rem; color: #888; margin-bottom: 1.5rem;">
+                                        { format!("ID: {}, Dernière mise à jour: {}", env.policy_id, env.updated_at) }
+                                    </p>
+
+                                    <div style="padding: .5rem;">
+                                        <div style="margin-bottom: 1rem;">
+                                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"LL_FS_RO"}</label>
+                                            <input 
+                                                type="text" 
+                                                value={env.default_ro.clone()}
+                                                oninput={bind_env_input("default_ro", selected_env.clone())}
+                                                style="
+                                                    width: 100%;
+                                                    padding: 0.75rem;
+                                                    background-color: #fff;
+                                                    border: 1px solid #ccc;
+                                                    border-radius: 4px;
+                                                    color: #333;
+                                                    box-sizing: border-box;
+                                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                                "
+                                            />
+                                            <p style="margin-top: 0.3rem; color: #888; font-size: 0.8rem;">{"Chemins accessibles en lecture seule"}</p>
+                                        </div>
+
+                                        <div style="margin-bottom: 1rem;">
+                                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"LL_FS_RW"}</label>
+                                            <input 
+                                                type="text" 
+                                                value={env.default_rw.clone()}
+                                                oninput={bind_env_input("default_rw", selected_env.clone())}
+                                                style="
+                                                    width: 100%;
+                                                    padding: 0.75rem;
+                                                    background-color: #fff;
+                                                    border: 1px solid #ccc;
+                                                    border-radius: 4px;
+                                                    color: #333;
+                                                    box-sizing: border-box;
+                                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                                "
+                                            />
+                                            <p style="margin-top: 0.3rem; color: #888; font-size: 0.8rem;">{"Chemins accessibles en lecture/écriture"}</p>
+                                        </div>
+
+                                        <div style="margin-bottom: 1rem;">
+                                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"TCP_BIND"}</label>
+                                            <input 
+                                                type="text" 
+                                                value={env.tcp_bind.clone()}
+                                                oninput={bind_env_input("tcp_bind", selected_env.clone())}
+                                                style="
+                                                    width: 100%;
+                                                    padding: 0.75rem;
+                                                    background-color: #fff;
+                                                    border: 1px solid #ccc;
+                                                    border-radius: 4px;
+                                                    color: #333;
+                                                    box-sizing: border-box;
+                                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                                "
+                                            />
+                                            <p style="margin-top: 0.3rem; color: #888; font-size: 0.8rem;">{"Ports pour les connexions entrantes"}</p>
+                                        </div>
+
+                                        <div style="margin-bottom: 1rem;">
+                                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"TCP_CONNECT"}</label>
+                                            <input 
+                                                type="text" 
+                                                value={env.tcp_connect.clone()}
+                                                oninput={bind_env_input("tcp_connect", selected_env.clone())}
+                                                style="
+                                                    width: 100%;
+                                                    padding: 0.75rem;
+                                                    background-color: #fff;
+                                                    border: 1px solid #ccc;
+                                                    border-radius: 4px;
+                                                    color: #333;
+                                                    box-sizing: border-box;
+                                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                                "
+                                            />
+                                            <p style="margin-top: 0.3rem; color: #888; font-size: 0.8rem;">{"Ports pour les connexions sortantes"}</p>
+                                        </div>
+
+                                        <div style="margin-bottom: 1rem;">
+                                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"Allowed IPs"}</label>
+                                            <input 
+                                                type="text" 
+                                                value={env.allowed_ips.clone()}
+                                                oninput={bind_env_input("allowed_ips", selected_env.clone())}
+                                                style="
+                                                    width: 100%;
+                                                    padding: 0.75rem;
+                                                    background-color: #fff;
+                                                    border: 1px solid #ccc;
+                                                    border-radius: 4px;
+                                                    color: #333;
+                                                    box-sizing: border-box;
+                                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                                "
+                                            />
+                                        </div>
+
+                                        <div style="margin-bottom: 1rem;">
+                                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"Allowed Domains"}</label>
+                                            <input 
+                                                type="text" 
+                                                value={env.allowed_domains.clone()}
+                                                oninput={bind_env_input("allowed_domains", selected_env.clone())}
+                                                style="
+                                                    width: 100%;
+                                                    padding: 0.75rem;
+                                                    background-color: #fff;
+                                                    border: 1px solid #ccc;
+                                                    border-radius: 4px;
+                                                    color: #333;
+                                                    box-sizing: border-box;
+                                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                                "
+                                            />
+                                        </div>
+
+                                        <button 
+                                            onclick={on_update_env.clone()}
+                                            style="
+                                                background-color: #3f51b5;
+                                                color: #fff;
+                                                border: none;
+                                                border-radius: 4px;
+                                                padding: 0.75rem 1.25rem;
+                                                font-size: 1rem;
+                                                margin-top: 1rem;
+                                                cursor: pointer;
+                                                transition: background-color 0.3s, transform 0.2s;
+                                                width: 100%;
+                                            "
+                                        >
+                                            { "Enregistrer" }
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        } else {
+                            html!{ 
+                                <div style="display: flex; justify-content: center; align-items: center; height: 100%; color: #888;">
+                                    <p>{ "Sélectionnez une configuration pour afficher ses détails." }</p>
                                 </div>
                             }
                         }
                     }
                 </div>
 
-                /* ----- colonne 2 : détails / édition ----- */
-                <div class="column is-one-third box ml-3">
-                {
-                    if let Some(env) = &*selected_env {
-                        html!{
-                            <>
-                                <div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
-                                    <h3 class="subtitle is-5 mb-0">
-                                        { format!("{} ({})", env.app_name, role_name_of(env.role_id, &roles)) }
-                                    </h3>
-                                    <button 
-                                        class="button is-small" 
-                                        onclick={toggle_view_mode}
-                                    >
-                                        { if *view_mode == "edit" { "Voir les événements" } else { "Modifier" } }
-                                    </button>
-                                </div>
-                                <p class="is-size-7 mb-4">{ format!("ID: {}, Dernière mise à jour: {}", env.policy_id, env.updated_at) }</p>
-
-                                {
-                                    if *view_mode == "edit" {
-                                        html!{
-                                            <div class="mt-3">
-                                                <div class="field">
-                                                    <label class="label">{ "LL_FS_RO" }</label>
-                                                    <div class="control">
-                                                        <input 
-                                                            class="input" 
-                                                            type="text" 
-                                                            value={env.default_ro.clone()}
-                                                            oninput={bind_env_input("default_ro", selected_env.clone())}
-                                                        />
-                                                    </div>
-                                                    <p class="help">{"Chemins accessibles en lecture seule"}</p>
-                                                </div>
-
-                                                <div class="field">
-                                                    <label class="label">{ "LL_FS_RW" }</label>
-                                                    <div class="control">
-                                                        <input 
-                                                            class="input" 
-                                                            type="text" 
-                                                            value={env.default_rw.clone()}
-                                                            oninput={bind_env_input("default_rw", selected_env.clone())}
-                                                        />
-                                                    </div>
-                                                    <p class="help">{"Chemins accessibles en lecture/écriture"}</p>
-                                                </div>
-
-                                                <div class="field">
-                                                    <label class="label">{ "TCP_BIND" }</label>
-                                                    <div class="control">
-                                                        <input 
-                                                            class="input" 
-                                                            type="text" 
-                                                            value={env.tcp_bind.clone()}
-                                                            oninput={bind_env_input("tcp_bind", selected_env.clone())}
-                                                        />
-                                                    </div>
-                                                    <p class="help">{"Ports pour les connexions entrantes"}</p>
-                                                </div>
-
-                                                <div class="field">
-                                                    <label class="label">{ "TCP_CONNECT" }</label>
-                                                    <div class="control">
-                                                        <input 
-                                                            class="input" 
-                                                            type="text" 
-                                                            value={env.tcp_connect.clone()}
-                                                            oninput={bind_env_input("tcp_connect", selected_env.clone())}
-                                                        />
-                                                    </div>
-                                                    <p class="help">{"Ports pour les connexions sortantes"}</p>
-                                                </div>
-
-                                                <div class="field">
-                                                    <label class="label">{ "Allowed IPs" }</label>
-                                                    <div class="control">
-                                                        <input 
-                                                            class="input" 
-                                                            type="text" 
-                                                            value={env.allowed_ips.clone()}
-                                                            oninput={bind_env_input("allowed_ips", selected_env.clone())}
-                                                        />
-                                                    </div>
-                                                </div>
-
-                                                <div class="field">
-                                                    <label class="label">{ "Allowed Domains" }</label>
-                                                    <div class="control">
-                                                        <input 
-                                                            class="input" 
-                                                            type="text" 
-                                                            value={env.allowed_domains.clone()}
-                                                            oninput={bind_env_input("allowed_domains", selected_env.clone())}
-                                                        />
-                                                    </div>
-                                                </div>
-
-                                                <div class="field is-grouped mt-4">
-                                                    <div class="control">
-                                                        <button class="button is-primary" onclick={on_update_env.clone()}>
-                                                            { "Enregistrer" }
-                                                        </button>
-                                                    </div>
-                                                    <div class="control">
-                                                        <button class="button is-danger" onclick={on_delete_env.clone()}>
-                                                            { "Supprimer" }
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        }
-                                    } else {
-                                        html!{
-                                            <div class="mt-3">
-                                                <h4 class="subtitle is-6 mb-2">{ "Événements" }</h4>
-                                                {
-                                                    if events.is_empty() {
-                                                        html! {
-                                                            <p class="has-text-grey">{ "Aucun événement trouvé." }</p>
-                                                        }
-                                                    } else {
-                                                        html! {
-                                                            <div class="table-container">
-                                                                <table class="table is-fullwidth is-striped is-hoverable">
-                                                                    <thead>
-                                                                        <tr>
-                                                                            <th>{"Date"}</th>
-                                                                            <th>{"Opération"}</th>
-                                                                            <th>{"Résultat"}</th>
-                                                                        </tr>
-                                                                    </thead>
-                                                                    <tbody>
-                                                                        { for events.iter().map(|ev| html!{
-                                                                            <tr>
-                                                                                <td>{ &ev.timestamp }</td>
-                                                                                <td>{ &ev.operation }</td>
-                                                                                <td>{ &ev.result }</td>
-                                                                            </tr>
-                                                                        }) }
-                                                                    </tbody>
-                                                                </table>
-                                                            </div>
-                                                        }
-                                                    }
-                                                }
-                                            </div>
-                                        }
-                                    }
-                                }
-                            </>
+                // Colonne 3: Création
+                <div style="flex: 1.5; background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 10px rgba(0,0,0,0.05);">
+                    <h3 style="font-size: 1.1rem; margin-bottom: 1rem; font-weight: 500; border-bottom: 1px solid #eee; padding-bottom: 0.75rem;">{"Nouvelle Configuration"}</h3>
+                    <p style="font-size: 0.8rem; color: #888; margin-bottom: 1.5rem;">
+                        { 
+                            if *selected_role == -1 {
+                                "Veuillez d'abord sélectionner un rôle" 
+                            } else {
+                                "Configuration pour le rôle sélectionné"
+                            }
                         }
-                    } else {
-                        html!{ 
-                            <div class="has-text-centered my-6">
-                                <p class="has-text-grey">{ "Sélectionnez une configuration pour afficher ses détails." }</p>
-                            </div> 
-                        }
-                    }
-                }
-                </div>
+                    </p>
 
-                /* ----- colonne 3 : création ----- */
-                <div class="column box ml-3">
-                    <h3 class="subtitle is-5 mb-3">{ "Nouvelle Configuration" }</h3>
-                    <p class="is-size-7 mb-4">{ 
-                        if *selected_role == -1 {
-                            "Veuillez d'abord sélectionner un rôle" 
-                        } else {
-                            "Configuration pour le rôle sélectionné"
-                        }
-                    }</p>
-
-                    <div class="field">
-                        <label class="label">{ "Nom de l'application" }</label>
-                        <div class="control">
+                    <div style="padding: .5rem;">
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"Nom de l'application"}</label>
                             <input 
-                                class="input" 
                                 type="text" 
-                                placeholder="Nom unique de l'application" 
+                                placeholder="Nom unique de l'application"
                                 value={(*f_app).clone()} 
                                 oninput={bind_input(f_app.clone())} 
                                 disabled={*selected_role == -1}
+                                style="
+                                    width: 100%;
+                                    padding: 0.75rem;
+                                    background-color: #fff;
+                                    border: 1px solid #ccc;
+                                    border-radius: 4px;
+                                    color: #333;
+                                    box-sizing: border-box;
+                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                "
                             />
                         </div>
-                    </div>
 
-                    <div class="field">
-                        <label class="label">{ "LL_FS_RO" }</label>
-                        <div class="control">
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"LL_FS_RO"}</label>
                             <input 
-                                class="input" 
                                 type="text" 
-                                placeholder="/usr:/lib" 
+                                placeholder="/usr:/lib"
                                 value={(*f_ro).clone()} 
                                 oninput={bind_input(f_ro.clone())} 
                                 disabled={*selected_role == -1}
+                                style="
+                                    width: 100%;
+                                    padding: 0.75rem;
+                                    background-color: #fff;
+                                    border: 1px solid #ccc;
+                                    border-radius: 4px;
+                                    color: #333;
+                                    box-sizing: border-box;
+                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                "
                             />
+                            <p style="margin-top: 0.3rem; color: #888; font-size: 0.8rem;">{"Chemins accessibles en lecture seule (séparés par des ':')"}</p>
                         </div>
-                        <p class="help">{"Chemins accessibles en lecture seule (séparés par des ':')"}</p>
-                    </div>
 
-                    <div class="field">
-                        <label class="label">{ "LL_FS_RW" }</label>
-                        <div class="control">
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"LL_FS_RW"}</label>
                             <input 
-                                class="input" 
                                 type="text" 
-                                placeholder="/tmp:/var/tmp" 
+                                placeholder="/tmp:/var/tmp"
                                 value={(*f_rw).clone()} 
                                 oninput={bind_input(f_rw.clone())} 
                                 disabled={*selected_role == -1}
+                                style="
+                                    width: 100%;
+                                    padding: 0.75rem;
+                                    background-color: #fff;
+                                    border: 1px solid #ccc;
+                                    border-radius: 4px;
+                                    color: #333;
+                                    box-sizing: border-box;
+                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                "
                             />
+                            <p style="margin-top: 0.3rem; color: #888; font-size: 0.8rem;">{"Chemins accessibles en lecture/écriture (séparés par des ':')"}</p>
                         </div>
-                        <p class="help">{"Chemins accessibles en lecture/écriture (séparés par des ':')"}</p>
-                    </div>
 
-                    <div class="field">
-                        <label class="label">{ "TCP_BIND" }</label>
-                        <div class="control">
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"TCP_BIND"}</label>
                             <input 
-                                class="input" 
                                 type="text" 
-                                placeholder="9418" 
+                                placeholder="9418"
                                 value={(*f_bind).clone()} 
                                 oninput={bind_input(f_bind.clone())} 
                                 disabled={*selected_role == -1}
+                                style="
+                                    width: 100%;
+                                    padding: 0.75rem;
+                                    background-color: #fff;
+                                    border: 1px solid #ccc;
+                                    border-radius: 4px;
+                                    color: #333;
+                                    box-sizing: border-box;
+                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                "
                             />
                         </div>
-                    </div>
 
-                    <div class="field">
-                        <label class="label">{ "TCP_CONNECT" }</label>
-                        <div class="control">
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"TCP_CONNECT"}</label>
                             <input 
-                                class="input" 
                                 type="text" 
-                                placeholder="80:443" 
+                                placeholder="80:443"
                                 value={(*f_conn).clone()} 
                                 oninput={bind_input(f_conn.clone())} 
                                 disabled={*selected_role == -1}
+                                style="
+                                    width: 100%;
+                                    padding: 0.75rem;
+                                    background-color: #fff;
+                                    border: 1px solid #ccc;
+                                    border-radius: 4px;
+                                    color: #333;
+                                    box-sizing: border-box;
+                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                "
                             />
                         </div>
-                    </div>
 
-                    <div class="field">
-                        <label class="label">{ "IPs autorisées" }</label>
-                        <div class="control">
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"IPs autorisées"}</label>
                             <input 
-                                class="input" 
                                 type="text" 
-                                placeholder="192.168.1.0/24" 
+                                placeholder="192.168.1.0/24"
                                 value={(*f_ips).clone()} 
                                 oninput={bind_input(f_ips.clone())} 
                                 disabled={*selected_role == -1}
+                                style="
+                                    width: 100%;
+                                    padding: 0.75rem;
+                                    background-color: #fff;
+                                    border: 1px solid #ccc;
+                                    border-radius: 4px;
+                                    color: #333;
+                                    box-sizing: border-box;
+                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                "
                             />
                         </div>
-                    </div>
 
-                    <div class="field">
-                        <label class="label">{ "Domaines autorisés" }</label>
-                        <div class="control">
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 500;">{"Domaines autorisés"}</label>
                             <input 
-                                class="input" 
                                 type="text" 
-                                placeholder="example.com,domain.org" 
+                                placeholder="example.com,domain.org"
                                 value={(*f_dom).clone()} 
                                 oninput={bind_input(f_dom.clone())} 
                                 disabled={*selected_role == -1}
+                                style="
+                                    width: 100%;
+                                    padding: 0.75rem;
+                                    background-color: #fff;
+                                    border: 1px solid #ccc;
+                                    border-radius: 4px;
+                                    color: #333;
+                                    box-sizing: border-box;
+                                    transition: border-color 0.3s, box-shadow 0.3s;
+                                "
                             />
                         </div>
-                    </div>
 
-                    <div class="field mt-4">
-                        <div class="control">
-                            <button 
-                                class="button is-primary is-fullwidth" 
-                                onclick={on_create_env}
-                                disabled={*selected_role == -1}
-                            >
-                                { "Créer la configuration" }
-                            </button>
-                        </div>
+                        <button 
+                            onclick={on_create_env}
+                            disabled={*selected_role == -1}
+                            style={format!(
+                                "
+                                background-color: {};
+                                color: #fff;
+                                border: none;
+                                border-radius: 4px;
+                                padding: 0.75rem 1.25rem;
+                                font-size: 1rem;
+                                margin-top: 1rem;
+                                cursor: {};
+                                transition: background-color 0.3s, transform 0.2s;
+                                width: 100%;
+                                ",
+                                if *selected_role == -1 { "#cecece" } else { "#3f51b5" },
+                                if *selected_role == -1 { "not-allowed" } else { "pointer" }
+                            )}
+                        >
+                            { "Créer la configuration" }
+                        </button>
                     </div>
                 </div>
             </div>
