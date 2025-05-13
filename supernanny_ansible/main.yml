@@ -1,0 +1,34 @@
+---
+# ── Play 1 ────────────────────────────────────────────────────────────
+- name: Fetch SuperNanny source
+  hosts: supernanny
+  gather_facts: yes
+  become: false               # clone as the normal user
+
+  vars:
+    repo_url:  https://github.com/CODE-XANA/SupperNanny.git
+    project_root: "{{ ansible_env.HOME }}/SupperNanny"
+
+  tasks:
+    - name: Create project directory
+      file:
+        path: "{{ project_root }}"
+        state: directory
+        mode: '0755'
+
+    - name: Clone repository (shallow, pinned to main)
+      git:
+        repo:   "{{ repo_url }}"
+        dest:   "{{ project_root }}"
+        depth:  1
+        version: main         # pin/tag here if desired
+        update: yes
+        force:  yes
+
+# ── Remaining stack (privileged) ──────────────────────────────────────
+- import_playbook: postgreSQL/init_postgresql.yml
+- import_playbook: Rust/install_rust.yml
+- import_playbook: Rust/build_sandboxer.yml
+- import_playbook: Rust/deploy_axiom_server.yml
+- import_playbook: Rust/deploy_admin_api.yml
+- import_playbook: Rust/deploy_frontend.yml

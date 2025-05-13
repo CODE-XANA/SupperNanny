@@ -1,0 +1,26 @@
+---
+- name: Install Rust toolchain
+  hosts: supernanny
+  become: true
+
+  tasks:
+    - apt:
+        name:
+          - build-essential
+          - pkg-config
+          - libssl-dev
+          - libpq-dev 
+          - git
+        update_cache: yes
+
+    - name: Run rustup installer (idempotent)
+      become: false
+      shell: |
+        curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+      args:
+        creates: "{{ ansible_env.HOME }}/.cargo/bin/rustc"
+
+    - lineinfile:
+        path: "{{ ansible_env.HOME }}/.bashrc"
+        line: 'export PATH="$HOME/.cargo/bin:$PATH"'
+        state: present

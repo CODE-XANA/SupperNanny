@@ -1,0 +1,73 @@
+---
+- name: Build & run WASM frontend
+  hosts: supernanny
+  gather_facts: yes
+  become: false                       # ← run as login user (kali)
+
+  vars:
+    user_home:    "{{ ansible_user_dir }}"              # /home/kali :contentReference[oaicite:1]{index=1}
+    project_root: "{{ user_home }}/SupperNanny"
+    frontend_dir: "{{ project_root }}/SuperNanny_front/frontend"
+    static_dir:   "{{ project_root }}/SuperNanny_front/static_server"
+    static_bin:   "{{ static_dir }}/target/release/static_server"
+
+  tasks:
+    # ---- make sure trunk is installed ----------------------------
+    - name: Install trunk CLI (idempotent)
+      shell: |
+        source $HOME/.cargo/env
+        cargo install --locked trunk
+      args:
+        executable: /bin/bash
+        creates: "{{ user_home }}/.cargo/bin/trunk"
+
+    # ---- build the WASM bundle -----------------------------------
+    - name: Compile WASM bundle
+      shell: |
+        source $HOME/.cargo/env
+        trunk build --release
+      args:
+        chdir: "{{ frontend_dir }}"
+        executable: /bin/bash
+
+    # ---- build the static HTTP server ----------------------------
+    - name: Build static‑server binary
+      shell: |
+        source $HOME/.cargo/env
+        cargo build --release
+      args:
+        chdir: "{{ static_dir }}"
+        executable: /bin/bash
+        creates: "{{ static_bin }}"
+
+    # ---- install systemd service (needs root) --------------------
+    - name: Install frontend systemd unit
+      become: true
+      copy:
+        dest: /etc/systemd/system/supernanny-frontend.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=SuperNanny Static Server
+          After=network.target
+
+          [Service]
+          User={{ ansible_user_id }}
+          WorkingDirectory={{ static_dir }}
+          ExecStart={{ static_bin }}
+          Restart=on-failure
+          PrivateTmp=yes                   # hardening :contentReference[oaicite:2]{index=2}
+          ProtectSystem=full
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart frontend
+
+  handlers:
+    - name: restart frontend
+      become: true
+      systemd:
+        name: supernanny-frontend
+        enabled: yes
+        state: restarted
+        daemon_reload: yes

@@ -1,0 +1,70 @@
+---
+- name: Install & configure PostgreSQL
+  hosts: supernanny
+  become: true
+
+  vars:
+    db_name: sandboxdb
+    db_user: sandboxuser
+    db_password: supernanny
+    sql_file: /tmp/supernanny_schema.sql
+    sql_url: https://raw.githubusercontent.com/CODE-XANA/SupperNanny/main/rust-landlock-main/queries_sql/full_script.sql
+
+  tasks:
+    - apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - python3-psycopg2
+        update_cache: yes
+
+    - service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    # refresh collations (fixes libc 2.41 vs 2.38 mismatch)
+    - name: Refresh collation version on template1
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: postgres
+        query: "ALTER DATABASE template1 REFRESH COLLATION VERSION;"
+
+    - name: Refresh collation version on postgres db itself
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: postgres
+        query: "ALTER DATABASE postgres REFRESH COLLATION VERSION;"
+
+    - name: Ensure DB user exists
+      become_user: postgres
+      community.postgresql.postgresql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        state: present
+
+    - name: Create SuperNanny database from template0
+      become_user: postgres
+      community.postgresql.postgresql_db:
+        name: "{{ db_name }}"
+        owner: "{{ db_user }}"
+        template: template0       
+        state: present
+
+    - name: Download schema
+      get_url:
+        url: "{{ sql_url }}"
+        dest: "{{ sql_file }}"
+        mode: '0644'
+
+    - name: Load schema
+      become_user: postgres
+      command: psql -d {{ db_name }} -f {{ sql_file }}
+
+    - name: Grant privileges
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        db: "{{ db_name }}"
+        query: |
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {{ db_user }};
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {{ db_user }};

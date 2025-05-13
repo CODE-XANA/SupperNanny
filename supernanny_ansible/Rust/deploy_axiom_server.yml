@@ -1,0 +1,74 @@
+---
+# We compile as the normal user (no sudo) and escalate
+# only for the systemd‑unit step that touches /etc.
+- name: Deploy Axiom backend
+  hosts: supernanny
+  gather_facts: yes
+  become: false                 # <── play runs under your login user
+
+  # HOME now resolves to /home/kali, never /root
+  vars:
+    user_home:    "{{ ansible_user_dir }}"            # e.g. /home/kali
+    project_root: "{{ user_home }}/SupperNanny"
+    service_dir:  "{{ project_root }}/supernanny_service"
+    service_bin:  "{{ service_dir }}/target/release/supernanny_service"
+    env_file:     "{{ service_dir }}/.env"
+
+  tasks:
+    # ── build ──────────────────────────────────────────────────────
+    - name: Build backend with cargo
+      shell: |
+        source $HOME/.cargo/env
+        cargo build --release
+      args:
+        chdir: "{{ service_dir }}"
+        executable: /bin/bash
+        creates: "{{ service_bin }}"
+
+    # ── runtime secrets ────────────────────────────────────────────
+    - name: Write .env file
+      copy:
+        dest: "{{ env_file }}"
+        owner: "{{ ansible_user_id }}"
+        mode:  '0600'
+        content: |
+          DB_HOST=127.0.0.1
+          DB_PORT=5432
+          DB_USER=sandboxuser
+          DB_PASS=supernanny
+          DB_NAME=sandboxdb
+          JWT_SECRET=aLmYgs2OyLXEACEzmStboJU5Rm6bC1blBdTvj9ULu8s=
+
+    # ── systemd unit (needs root) ──────────────────────────────────
+    - name: Install systemd service
+      become: true
+      copy:
+        dest: /etc/systemd/system/supernanny-axiom.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=SuperNanny Axiom Server
+          After=network.target postgresql.service
+
+          [Service]
+          User={{ ansible_user_id }}
+          WorkingDirectory={{ service_dir }}
+          ExecStart={{ service_bin }}
+          EnvironmentFile={{ env_file }}
+          Restart=on-failure
+          NoNewPrivileges=yes
+          ProtectSystem=full
+          PrivateTmp=yes
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart axiom
+
+  handlers:
+    - name: restart axiom
+      become: true
+      systemd:
+        name: supernanny-axiom
+        enabled: yes
+        state: restarted
+        daemon_reload: yes

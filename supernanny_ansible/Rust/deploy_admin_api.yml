@@ -1,0 +1,72 @@
+---
+- name: Deploy Admin‑API service
+  hosts: supernanny
+  gather_facts: yes
+  become: false                     # <- run as login user (e.g. kali)
+
+  vars:
+    user_home:    "{{ ansible_user_dir }}"        # /home/kali :contentReference[oaicite:0]{index=0}
+    project_root: "{{ user_home }}/SupperNanny"
+    api_dir:      "{{ project_root }}/SuperNanny_api"
+    api_bin:      "{{ api_dir }}/target/release/SuperNanny_api"
+    env_file:     "{{ api_dir }}/.env"
+
+  tasks:
+    # ---- build ---------------------------------------------------
+    - name: Build Admin‑API with cargo
+      shell: |
+        source $HOME/.cargo/env           # cargo in PATH
+        cargo build --release
+      args:
+        chdir: "{{ api_dir }}"
+        executable: /bin/bash
+        creates: "{{ api_bin }}"          # idempotent build :contentReference[oaicite:1]{index=1}
+
+    # ---- runtime secrets -----------------------------------------
+    - name: Write .env file
+      copy:
+        dest: "{{ env_file }}"
+        owner: "{{ ansible_user_id }}"
+        mode:  '0600'
+        content: |
+          DB_HOST=127.0.0.1
+          DB_PORT=5432
+          DB_USER=sandboxuser
+          DB_PASS=supernanny
+          DB_NAME=sandboxdb
+          JWT_SECRET=4281bb530b7e8fd6b2d94b87017f5e565dfff08482f86f6f4d13ef2695e3b0342f93e15945d6c3071d0de9b2aa982d25f516d0013eef111bfad70ec5c58e7bd4
+          JWT_TTL_MIN=60
+          HTTPS_PORT=9443
+
+    # ---- systemd service (needs root) ----------------------------
+    - name: Install systemd unit
+      become: true
+      copy:
+        dest: /etc/systemd/system/supernanny-admin-api.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=SuperNanny Admin API
+          After=network.target postgresql.service
+
+          [Service]
+          User={{ ansible_user_id }}
+          WorkingDirectory={{ api_dir }}
+          ExecStart={{ api_bin }}
+          EnvironmentFile={{ env_file }}
+          Restart=on-failure
+          PrivateTmp=yes                   # hardening :contentReference[oaicite:2]{index=2}
+          ProtectSystem=full
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart api
+
+  handlers:
+    - name: restart api
+      become: true
+      systemd:
+        name: supernanny-admin-api
+        enabled: yes
+        state: restarted
+        daemon_reload: yes
