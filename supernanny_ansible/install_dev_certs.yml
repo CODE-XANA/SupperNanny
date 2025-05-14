@@ -1,0 +1,36 @@
+---
+- name: Install SuperNanny development CA certificates (Debian family)
+  hosts: supernanny
+  gather_facts: yes
+  become: false                      # stay as the login user (kali)
+
+  vars:
+    user_home: "{{ ansible_user_dir }}"
+    certificate_files:
+      - src: "{{ user_home }}/SupperNanny/SuperNanny_api/certs/dev-cert.pem"
+        dest_name: supernanny-api-dev-cert.crt          # <─ .crt
+      - src: "{{ user_home }}/SupperNanny/SuperNanny_front/static_server/certs/dev-cert.pem"
+        dest_name: supernanny-frontend-dev-cert.crt     # <─ .crt
+      - src: "{{ user_home }}/SupperNanny/supernanny_service/dev-cert.pem"
+        dest_name: supernanny-service-dev-cert.crt      # <─ .crt
+
+  tasks:
+    - name: Copy dev CA certs into Debian trust directory
+      become: true                   # escalate *just* for the copy
+      copy:
+        src:  "{{ item.src }}"
+        dest: "/usr/local/share/ca-certificates/{{ item.dest_name }}"
+        remote_src: yes              # file is already on the target host
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ certificate_files }}"
+      when: ansible_os_family == 'Debian'
+      notify: update ca trust
+
+#################################################################
+  handlers:
+    - name: update ca trust
+      become: true
+      command: update-ca-certificates
+      listen: update ca trust
