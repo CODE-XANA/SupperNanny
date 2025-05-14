@@ -1,0 +1,44 @@
+---
+- name: Install Rust toolchain and build Sandboxer
+  hosts: supernanny
+  gather_facts: yes          # keep if you need facts elsewhere
+  vars:
+    # Directory that contains your Cargo.toml
+    sandboxer_src_dir: "/home/presentation/sandboxer"   # <-- adjust as needed
+
+  tasks:
+    #################################################################
+    # 1. Build dependencies (root)
+    #################################################################
+    - name: Install system build packages
+      become: true
+      apt:
+        name:
+          - build-essential
+          - pkg-config
+          - libssl-dev
+          - libpq-dev
+          - git
+          - strace
+        update_cache: yes
+
+    #################################################################
+    # 2. Rust toolchain (unprivileged, idempotent)
+    #################################################################
+    - name: Install rustup if not present
+      become: false
+      shell: |
+        curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+      args:
+        creates: "{{ ansible_env.HOME }}/.cargo/bin/rustc"
+
+    #################################################################
+    # 3. Build project (unprivileged)
+    #################################################################
+    - name: Compile Sandboxer in release mode
+      become: false
+      shell: cargo build --release
+      args:
+        chdir: "{{ sandboxer_src_dir }}"
+      environment:
+        PATH: "{{ ansible_env.HOME }}/.cargo/bin:{{ ansible_env.PATH }}"
