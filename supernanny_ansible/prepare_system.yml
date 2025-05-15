@@ -1,0 +1,19 @@
+---
+- name: Prepare the system
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Update APT package index
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    - name: Ensure git is installed
+      apt:
+        name: git
+        state: present
