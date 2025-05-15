@@ -26,6 +26,7 @@
         force:  yes
 
 # ── Remaining stack (privileged) ──────────────────────────────────────
+- import_playbook: prepare_system.yml
 - import_playbook: postgreSQL/init_postgresql.yml
 - import_playbook: Rust/install_rust.yml
 - import_playbook: Rust/build_sandboxer.yml
