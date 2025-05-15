@@ -1,0 +1,59 @@
+name: SuperNanny CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  rust-build:
+    name: Build all Rust components
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: clippy, rustfmt
+
+      - name: Format check (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      - name: Lint check (cargo clippy)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Security audit (cargo audit)
+        run: cargo audit
+
+      - name: Build Sandboxer (rust-landlock-main)
+        run: |
+          cd rust-landlock-main
+          cargo build --release
+
+      - name: Build Admin API (SuperNanny_api)
+        run: |
+          cd SuperNanny_api
+          cargo build --release
+
+      - name: Build Axiom Server (supernanny_service)
+        run: |
+          cd supernanny_service
+          cargo build --release
+
+      - name: Install Trunk (for frontend)
+        run: |
+          cargo install --locked trunk
+
+      - name: Build Frontend (SuperNanny_front/static_server)
+        run: |
+          cd SuperNanny_front/static_server
+          trunk build --release
