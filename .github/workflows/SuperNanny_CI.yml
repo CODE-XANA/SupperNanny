@@ -8,7 +8,7 @@ on:
 
 jobs:
   rust-build:
-    name: Build all Rust components
+    name: Build and validate Rust components
     runs-on: ubuntu-latest
 
     steps:
@@ -22,38 +22,36 @@ jobs:
           override: true
           components: clippy, rustfmt
 
-      - name: Format check (cargo fmt)
-        run: cargo fmt --all -- --check
-
-      - name: Lint check (cargo clippy)
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-
-      - name: Security audit (cargo audit)
-        run: cargo audit
-
-      - name: Build Sandboxer (rust-landlock-main)
-        run: |
-          cd rust-landlock-main
-          cargo build --release
-
-      - name: Build Admin API (SuperNanny_api)
-        run: |
-          cd SuperNanny_api
-          cargo build --release
-
-      - name: Build Axiom Server (supernanny_service)
-        run: |
-          cd supernanny_service
-          cargo build --release
-
-      - name: Install Trunk (for frontend)
+      - name: Install trunk and cargo-audit
         run: |
           cargo install --locked trunk
+          cargo install cargo-audit
 
-      - name: Build Frontend (SuperNanny_front/static_server)
+      - name: Build and validate rust-landlock-main
+        working-directory: rust-landlock-main
         run: |
-          cd SuperNanny_front/static_server
+          cargo fmt -- --check
+          cargo clippy --all-targets -- -D warnings
+          cargo build --release
+          cargo audit
+
+      - name: Build and validate SuperNanny_api
+        working-directory: SuperNanny_api
+        run: |
+          cargo fmt -- --check
+          cargo clippy --all-targets -- -D warnings
+          cargo build --release
+          cargo audit
+
+      - name: Build and validate supernanny_service
+        working-directory: supernanny_service
+        run: |
+          cargo fmt -- --check
+          cargo clippy --all-targets -- -D warnings
+          cargo build --release
+          cargo audit
+
+      - name: Build frontend with trunk
+        working-directory: SuperNanny_front/static_server
+        run: |
           trunk build --release
