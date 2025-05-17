@@ -6,7 +6,7 @@ Master Project ISEN 2024/2025
 **Prérequis**
 
 Il est nécessaire d'installer Ansible pour déployer ce projet. 
-Vous pouvez suivre les indications en fonction de votre distribution en [cliquant ici] (https://docs.ansible.com/ansible/latest/installation_guide/installation_distros.html).
+Vous pouvez suivre les indications en fonction de votre distribution en [cliquant ici](https://docs.ansible.com/ansible/latest/installation_guide/installation_distros.html).
 
 **Master Node**
 
@@ -29,7 +29,9 @@ Un mot de passe vous sera demandé. Souvenez-vous en, il vous permettra de modif
 Une fois le mot de passe entré, saisissez ces lignes : 
 
 ```master_address: "<MASTER_IP>"```
+
 ```kubeadm_token: "<TOKEN>"```
+
 ```ca_cert_hash: "<votre HASH>"```
 
 > Attention ! Si vous n'utilisez pas les mêmes noms de variables que celles ci-dessus, votre worker node ne fonctionnera pas. Ou bien modifiez l'appel des variables dans le playbook workernode. 
