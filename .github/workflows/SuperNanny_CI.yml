@@ -38,7 +38,10 @@ jobs:
         run: |
           cargo build --release
           cargo audit
-
+          
+      - name: Add WebAssembly target
+        run: rustup target add wasm32-unknown-unknown
+        
       - name: Build Yew frontend with trunk
         working-directory: SuperNanny_front/frontend
         run: trunk build --release
