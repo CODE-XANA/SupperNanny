@@ -11,57 +11,58 @@
     sql_url: https://raw.githubusercontent.com/CODE-XANA/SupperNanny/main/rust-landlock-main/queries_sql/full_script.sql
 
   tasks:
-    - apt:
+    - name: "Step 1/8: Install PostgreSQL and dependencies"
+      apt:
         name:
           - postgresql
           - postgresql-contrib
           - python3-psycopg2
         update_cache: yes
 
-    - service:
+    - name: "Step 2/8: Ensure PostgreSQL service is started"
+      service:
         name: postgresql
         state: started
         enabled: yes
 
-    # refresh collations (fixes libc 2.41 vs 2.38 mismatch)
-    - name: Refresh collation version on template1
+    - name: "Step 3/8: Refresh collation version on template1"
       become_user: postgres
       community.postgresql.postgresql_query:
         db: postgres
         query: "ALTER DATABASE template1 REFRESH COLLATION VERSION;"
 
-    - name: Refresh collation version on postgres db itself
+    - name: "Refresh collation version on postgres db itself"
       become_user: postgres
       community.postgresql.postgresql_query:
         db: postgres
         query: "ALTER DATABASE postgres REFRESH COLLATION VERSION;"
 
-    - name: Ensure DB user exists
+    - name: "Step 4/8: Ensure database user exists"
       become_user: postgres
       community.postgresql.postgresql_user:
         name: "{{ db_user }}"
         password: "{{ db_password }}"
         state: present
 
-    - name: Create SuperNanny database from template0
+    - name: "Step 5/8: Create SuperNanny database"
       become_user: postgres
       community.postgresql.postgresql_db:
         name: "{{ db_name }}"
         owner: "{{ db_user }}"
-        template: template0       
+        template: template0
         state: present
 
-    - name: Download schema
+    - name: "Step 6/8: Download schema SQL"
       get_url:
         url: "{{ sql_url }}"
         dest: "{{ sql_file }}"
         mode: '0644'
 
-    - name: Load schema
+    - name: "Step 7/8: Load schema into database"
       become_user: postgres
       command: psql -d {{ db_name }} -f {{ sql_file }}
 
-    - name: Grant privileges
+    - name: "Step 8/8: Grant privileges to DB user"
       become_user: postgres
       community.postgresql.postgresql_query:
         db: "{{ db_name }}"
