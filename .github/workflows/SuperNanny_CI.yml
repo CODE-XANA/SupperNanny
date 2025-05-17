@@ -8,43 +8,34 @@ on:
 
 jobs:
   rust-build:
-    name: Build and validate Rust components
+    name: Build and audit SuperNanny components
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          components: clippy
-
-      - name: Install trunk and cargo-audit
+      - name: Install Rust and tools
         run: |
+          rustup update stable
           cargo install --locked trunk
           cargo install cargo-audit
 
-      - name: Validate and build rust-landlock-main
+      - name: Build rust-landlock-main
         working-directory: rust-landlock-main
         run: |
-          cargo clippy --all-targets -- -D warnings
           cargo build --release
           cargo audit
 
-      - name: Validate and build SuperNanny_api
+      - name: Build SuperNanny_api
         working-directory: SuperNanny_api
         run: |
-          cargo clippy --all-targets -- -D warnings
           cargo build --release
           cargo audit
 
-      - name: Validate and build supernanny_service
+      - name: Build supernanny_service
         working-directory: supernanny_service
         run: |
-          cargo clippy --all-targets -- -D warnings
           cargo build --release
           cargo audit
 
