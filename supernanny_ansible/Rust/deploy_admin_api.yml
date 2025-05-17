@@ -1,33 +1,39 @@
 ---
-- name: Deploy Admin‑API service
+- name: Deploy Admin-API service
   hosts: supernanny
   gather_facts: yes
-  become: false                     # <- run as login user (e.g. kali)
+  become: false
 
   vars:
-    user_home:    "{{ ansible_user_dir }}"        # /home/kali :contentReference[oaicite:0]{index=0}
+    user_home:    "{{ ansible_user_dir }}"
     project_root: "{{ user_home }}/SupperNanny"
     api_dir:      "{{ project_root }}/SuperNanny_api"
     api_bin:      "{{ api_dir }}/target/release/SuperNanny_api"
     env_file:     "{{ api_dir }}/.env"
 
   tasks:
-    # ---- build ---------------------------------------------------
-    - name: Build Admin‑API with cargo
+    - name: "Step 1/3: Building Admin API"
+      debug:
+        msg: "Building SuperNanny Admin API with cargo..."
+
+    - name: Build Admin-API with cargo
       shell: |
-        source $HOME/.cargo/env           # cargo in PATH
+        source $HOME/.cargo/env
         cargo build --release
       args:
         chdir: "{{ api_dir }}"
         executable: /bin/bash
-        creates: "{{ api_bin }}"          # idempotent build :contentReference[oaicite:1]{index=1}
+        creates: "{{ api_bin }}"
 
-    # ---- runtime secrets -----------------------------------------
+    - name: "Step 2/3: Writing .env configuration"
+      debug:
+        msg: "Writing runtime environment variables for Admin API..."
+
     - name: Write .env file
       copy:
         dest: "{{ env_file }}"
         owner: "{{ ansible_user_id }}"
-        mode:  '0600'
+        mode: '0600'
         content: |
           DB_HOST=127.0.0.1
           DB_PORT=5432
@@ -38,7 +44,10 @@
           JWT_TTL_MIN=60
           HTTPS_PORT=9443
 
-    # ---- systemd service (needs root) ----------------------------
+    - name: "Step 3/3: Installing systemd unit"
+      debug:
+        msg: "Installing and enabling supernanny-admin-api systemd service..."
+
     - name: Install systemd unit
       become: true
       copy:
@@ -55,7 +64,7 @@
           ExecStart={{ api_bin }}
           EnvironmentFile={{ env_file }}
           Restart=on-failure
-          PrivateTmp=yes                   # hardening :contentReference[oaicite:2]{index=2}
+          PrivateTmp=yes
           ProtectSystem=full
 
           [Install]
