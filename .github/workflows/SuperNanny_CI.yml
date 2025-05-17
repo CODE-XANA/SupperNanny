@@ -39,6 +39,10 @@ jobs:
           cargo build --release
           cargo audit
 
-      - name: Build frontend with trunk
-        working-directory: SuperNanny_front/static_server
+      - name: Build Yew frontend with trunk
+        working-directory: SuperNanny_front/frontend
         run: trunk build --release
+
+      - name: Build static_server
+        working-directory: SuperNanny_front/static_server
+        run: cargo build --release
