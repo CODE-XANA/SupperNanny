@@ -49,7 +49,7 @@ jobs:
           mkdir -p release/supernanny_service
           mkdir -p release/frontend
 
-          cp rust-landlock-main/target/release/rust-landlock-main release/sandboxer/
+          cp rust-landlock-main/target/release/supernanny_sandboxer release/sandboxer/
           cp SuperNanny_api/target/release/SuperNanny_api release/SuperNanny_api/
           cp supernanny_service/target/release/supernanny_service release/supernanny_service/
           cp SuperNanny_front/target/release/static_server release/frontend/
