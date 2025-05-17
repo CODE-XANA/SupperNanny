@@ -1,16 +1,20 @@
 ---
-- name: Build rust‑landlock Sandboxer
+- name: Build rust-landlock Sandboxer
   hosts: supernanny
-  become: false            # compile as your normal user
+  become: false  # compile as your normal user
 
   vars:
     project_root: "{{ ansible_env.HOME }}/SupperNanny"
     sandbox_dir:  "{{ project_root }}/rust-landlock-main"
 
   tasks:
-    - name: Compile Sandboxer in release mode
+    - name: "Step 1/2: Starting sandboxer compilation"
+      debug:
+        msg: "Building sandboxer in {{ sandbox_dir }} with cargo release mode..."
+
+    - name: "Step 2/2: Compile Sandboxer in release mode"
       shell: |
-        source $HOME/.cargo/env        # load cargo into PATH
+        source $HOME/.cargo/env
         cargo build --release
       args:
         chdir: "{{ sandbox_dir }}"
