@@ -4,19 +4,19 @@
   become: false
 
   tasks:
-    - name: Download rustup installer
+    - name: "Step 1/6: Download rustup installer"
       get_url:
         url: https://sh.rustup.rs
         dest: /tmp/rustup-init.sh
         mode: '0755'
 
-    - name: Run rustup installer (non-interactive)
+    - name: "Step 2/6: Run rustup installer (non-interactive)"
       shell: |
         /tmp/rustup-init.sh -y
       args:
         creates: ~/.cargo/bin/rustc
 
-    - name: Ensure cargo env is sourced in .bashrc
+    - name: "Step 3/6: Ensure cargo env is sourced in .bashrc"
       lineinfile:
         path: ~/.bashrc
         line: 'source $HOME/.cargo/env'
@@ -28,14 +28,14 @@
         line: 'source $HOME/.cargo/env'
         insertafter: EOF
 
-    - name: Source cargo environment for this session
+    - name: "Step 4/6: Source cargo environment for this session"
       shell: bash -c "source $HOME/.cargo/env"
 
-    - name: Check cargo version
+    - name: "Step 5/6: Check cargo version"
       shell: bash -c "source $HOME/.cargo/env && cargo --version"
       register: cargo_version_output
       changed_when: false
 
-    - name: Show cargo version
+    - name: "Step 6/6: Show cargo version"
       debug:
         msg: "{{ cargo_version_output.stdout }}"
