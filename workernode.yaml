@@ -1,0 +1,99 @@
+- name: worker node
+  hosts: localhost
+  become: true
+  vars_files:
+    - secret.yaml
+  tasks:
+    - name: Mise à jour
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Upgrade
+      ansible.builtin.apt:
+        upgrade: yes
+
+    - name: Désactiver le swapoff y compris lors du redémarrage de la machine
+      command: sed -i '/swap/ s/^/#/' /etc/fstab
+
+    - name: Installation paquets
+      ansible.builtin.apt:
+        name: containerd
+
+    - name: Mise à jour
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Démarrer le systemctl containerd
+      ansible.builtin.service:
+        name: containerd
+        state: started
+      when: not ansible_check_mode
+
+    - name: Activer le systemctl containerd
+      ansible.builtin.service: 
+        name: containerd
+        enabled: yes
+      when: not ansible_check_mode
+
+    - name: Installer les utilitaires
+      ansible.builtin.apt:
+        name: 
+        - apt-transport-https 
+        - ca-certificates 
+        - curl
+        - gpg
+
+    - name: Créer le répertoire /etc/apt/keyrings
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Télécharger et convertir la clé GPG Kubernetes
+      ansible.builtin.command: >
+        bash -c "curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Ajouter le dépôt Kubernetes dans sources.list.d
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Mise à jour 
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Installer kublet, kubeadm et kubectl
+      ansible.builtin.apt:
+        name: 
+        - kubelet
+        - kubeadm
+        - kubectl
+        state: present
+      when: not ansible_check_mode
+
+    - name: Mettre en hold kublet, kubeadm et kubectl
+      command: apt-mark hold kubelet kubeadm kubectl
+      when: not ansible_check_mode
+
+    - name: Activer le service kubelet
+      ansible.builtin.service:
+        name: kubelet
+        enabled: yes
+      when: not ansible_check_mode
+
+    - name: Joindre le worker au cluster Kubernetes
+      ansible.builtin.command: >
+        kubeadm join {{ master_address }}:6443
+        --token {{ kubeadm_token }}
+        --discovery-token-ca-cert-hash sha256:{{ ca_cert_hash }}
+      when: not ansible_check_mode
+
+    - name: Appliquer le manifest Calico avec kubectl
+      ansible.builtin.command: >
+        kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
