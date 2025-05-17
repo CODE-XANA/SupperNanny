@@ -1,0 +1,57 @@
+name: SuperNanny Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    name: Build and publish precompiled binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Add WebAssembly target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install trunk
+        run: cargo install --locked trunk
+
+      - name: Build all binaries
+        run: |
+          cargo build --release --manifest-path=rust-landlock-main/Cargo.toml
+          cargo build --release --manifest-path=SuperNanny_api/Cargo.toml
+          cargo build --release --manifest-path=supernanny_service/Cargo.toml
+          cargo build --release --manifest-path=SuperNanny_front/static_server/Cargo.toml
+          trunk build --release --manifest-path=SuperNanny_front/frontend/Cargo.toml
+
+      - name: Prepare release directory
+        run: |
+          mkdir -p release/sandboxer
+          mkdir -p release/SuperNanny_api
+          mkdir -p release/supernanny_service
+          mkdir -p release/frontend
+
+          cp rust-landlock-main/target/release/rust-landlock-main release/sandboxer/
+          cp SuperNanny_api/target/release/SuperNanny_api release/SuperNanny_api/
+          cp supernanny_service/target/release/supernanny_service release/supernanny_service/
+          cp SuperNanny_front/target/release/static_server release/frontend/
+
+      - name: Create tarball
+        run: tar -czvf supernanny-release.tar.gz -C release .
+
+      - name: Upload release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: supernanny-release.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
