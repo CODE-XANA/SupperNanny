@@ -1,11 +1,9 @@
 ---
-- name: Deploy SuperNanny Frontend (Rust + Yew)
+- name: Deploy SuperNanny Frontend (Rust + Yew)
   hosts: supernanny
   gather_facts: yes
-  become: false               # build as the SSH user
+  become: false
 
-#################################################################
-# ─── variables ─────────────────────────────────────────────────
   vars:
     user_home: "{{ ansible_user_dir }}"
     project_root: "{{ user_home }}/SupperNanny"
@@ -19,15 +17,12 @@
     binstall_bin: "{{ user_home }}/.cargo/bin/cargo-binstall"
     trunk_bin:    "{{ user_home }}/.cargo/bin/trunk"
 
-#################################################################
   tasks:
-    # 1 ─ Ensure the WebAssembly target is installed ────────────
-    - name: rustup add wasm32‑unknown‑unknown
+    - name: "Step 1/7: Ensure wasm32-unknown-unknown target is installed"
       command: "{{ rustup_bin }} target add wasm32-unknown-unknown"
       changed_when: false
 
-    # 2 ─ Install cargo‑binstall if missing ─────────────────────
-    - name: Install cargo‑binstall
+    - name: "Step 2/7: Install cargo-binstall (if missing)"
       shell: |
         source "$HOME/.cargo/env"
         {{ cargo_bin }} install cargo-binstall --locked
@@ -35,13 +30,12 @@
         executable: /bin/bash
         creates: "{{ binstall_bin }}"
 
-    # 3 ─ Install Trunk (static binary) if missing ─────────────
-    - name: Check for existing Trunk
+    - name: "Step 3/7: Check for existing Trunk"
       stat:
         path: "{{ trunk_bin }}"
       register: trunk_status
 
-    - name: Install Trunk with cargo‑binstall
+    - name: Install Trunk with cargo-binstall (if missing)
       shell: |
         source "$HOME/.cargo/env"
         {{ binstall_bin }} trunk --no-confirm
@@ -49,8 +43,7 @@
         executable: /bin/bash
       when: not trunk_status.stat.exists
 
-    # 4 ─ Build the Yew frontend with Trunk ────────────────────
-    - name: Build frontend (release)
+    - name: "Step 4/7: Build frontend with Trunk (release)"
       shell: |
         source "$HOME/.cargo/env"
         {{ trunk_bin }} build --release
@@ -58,8 +51,7 @@
         chdir: "{{ frontend_dir }}"
         executable: /bin/bash
 
-    # 5 ─ Build the static server crate ────────────────────────
-    - name: Build static_server (release)
+    - name: "Step 5/7: Build static_server (release)"
       shell: |
         source "$HOME/.cargo/env"
         {{ cargo_bin }} build --release
@@ -69,28 +61,13 @@
       register: build_result
       failed_when: build_result.rc != 0
 
-    # 6 ─ Verify the binary was produced ───────────────────────
-    - name: Verify static_server binary exists
+    - name: "Step 6/7: Verify static_server binary exists"
       stat:
         path: "{{ static_server_binary }}"
       register: binary_status
       failed_when: not binary_status.stat.exists
 
-    # 7 ─ Smoke‑test the binary ────────────────────────────────
-    - name: Run static_server ‑‑version
-      shell: |
-        cd {{ static_server_dir }}
-        {{ static_server_binary }} --version \
-          || {{ static_server_binary }} -v \
-          || echo "Binary starts but has no version flag"
-      args:
-        executable: /bin/bash
-      register: test_run
-      failed_when: test_run.rc > 1        # allow rc 0 or 1
-      ignore_errors: yes
-
-    # 8 ─ Deploy / reload systemd unit ─────────────────────────
-    - name: Install systemd service
+    - name: "Step 7/7: Install systemd service for static_server"
       become: true
       copy:
         dest: /etc/systemd/system/supernanny-frontend.service
@@ -115,7 +92,6 @@
           WantedBy=multi-user.target
       notify: restart frontend
 
-#################################################################
   handlers:
     - name: restart frontend
       become: true
