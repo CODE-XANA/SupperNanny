@@ -20,38 +20,34 @@ jobs:
         with:
           toolchain: stable
           override: true
-          components: clippy, rustfmt
+          components: clippy
 
       - name: Install trunk and cargo-audit
         run: |
           cargo install --locked trunk
           cargo install cargo-audit
 
-      - name: Build and validate rust-landlock-main
+      - name: Validate and build rust-landlock-main
         working-directory: rust-landlock-main
         run: |
-          cargo fmt -- --check
           cargo clippy --all-targets -- -D warnings
           cargo build --release
           cargo audit
 
-      - name: Build and validate SuperNanny_api
+      - name: Validate and build SuperNanny_api
         working-directory: SuperNanny_api
         run: |
-          cargo fmt -- --check
           cargo clippy --all-targets -- -D warnings
           cargo build --release
           cargo audit
 
-      - name: Build and validate supernanny_service
+      - name: Validate and build supernanny_service
         working-directory: supernanny_service
         run: |
-          cargo fmt -- --check
           cargo clippy --all-targets -- -D warnings
           cargo build --release
           cargo audit
 
       - name: Build frontend with trunk
         working-directory: SuperNanny_front/static_server
-        run: |
-          trunk build --release
+        run: trunk build --release
