@@ -1,0 +1,168 @@
+- name: masternode
+  hosts: localhost
+  become: true
+  tasks:
+    - name: Mise à jour
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Upgrade
+      ansible.builtin.apt:
+        upgrade: yes
+    
+    - name: Désactiver le swapoff y compris lors du redémarrage de la machine
+      command: sed -i '/swap/ s/^/#/' /etc/fstab
+
+    - name: Configuration réseau nécessaire 1 - charger br_netfilter
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          br_netfilter
+          owner: root
+          group: root
+          mode: '0644'
+
+    - name: Configuration réseau nécessaire 2 - sysctl params
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Appliquer les paramètres sysctl
+      ansible.builtin.command: sysctl --system
+
+
+    - name: Installation paquets
+      ansible.builtin.apt:
+        name: containerd
+
+    - name: Créer le répertoire /etc/apt/keyrings
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+
+    - name: Créer le fichier de configuration de containerd
+      ansible.builtin.command: containerd config default
+      register: containerd_config
+      changed_when: true
+      failed_when: containerd_config.rc != 0
+
+    - name: Créer le répertoire /etc/containerd si nécessaire
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'
+
+    - name: Sauvegarder la configuration par défaut dans /etc/containerd/config.toml
+      ansible.builtin.copy:
+        dest: /etc/containerd/config.toml
+        content: "{{ containerd_config.stdout }}"
+        mode: '0644'
+
+    - name: Modifier SystemdCgroup dans le fichier containerd config.toml
+      ansible.builtin.lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^(SystemdCgroup)\s*=\s*false'
+        line: 'SystemdCgroup = true'
+        backrefs: yes
+        insertafter: '^\[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options\]'
+      when: not ansible_check_mode
+
+    - name: Démarrer et activer le systemctl containerd
+      ansible.builtin.service:
+        name: containerd
+        state: started
+        enabled: yes
+      when: not ansible_check_mode
+
+    - name: Installer les utilitaires
+      ansible.builtin.apt:
+        name: 
+        - apt-transport-https 
+        - ca-certificates 
+        - curl
+        - gpg
+
+    - name: Créer le répertoire /etc/apt/keyrings
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Télécharger et convertir la clé GPG Kubernetes
+      ansible.builtin.command: >
+        bash -c "curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Ajouter le dépôt Kubernetes dans sources.list.d
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Mise à jour 
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Installer kublet, kubeadm et kubectl
+      ansible.builtin.apt:
+        name: 
+        - kubelet
+        - kubeadm
+        - kubectl
+        state: present
+      when: not ansible_check_mode
+
+    - name: Mettre en hold kublet, kubeadm et kubectl
+      command: apt-mark hold kubelet kubeadm kubectl
+      when: not ansible_check_mode
+
+    - name: Initialiser le cluster en ignorant certaines erreurs
+      command: kubeadm init --pod-network-cidr=192.168.0.0/16
+      failed_when: kubeadm_init_result.rc != 0
+      changed_when: kubeadm_init_result.rc == 0
+
+    - name: Données sensibles à conserver
+      debug:
+        msg: "{{ kubeadm_init_result.stdout }}"
+
+    - name: Créer le répertoire .kube dans le home de l'utilisateur courant
+      file:
+        path: "{{ ansible_env.HOME }}/.kube"
+        state: directory
+        mode: '0755'
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+
+    - name: Copier le fichier admin.conf vers ~/.kube/config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ ansible_env.HOME }}/.kube/config"
+        remote_src: yes
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+        mode: '0644'
+      when: not ansible_check_mode
+
+    - name: Installer le CNI (Calico)
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+      when: not ansible_check_mode
+      register: calico_install_result
+      failed_when: calico_install_result.rc != 0
+
+    - name: Vérifier que le cluster fonctionne correctement
+      ansible.builtin.command:
+        cmd: kubectl get nodes && kubectl get pods -A
+      when: not ansible_check_mode
+      register: kubectl_status_result
+      failed_when: kubectl_status_result.rc != 0

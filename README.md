@@ -3,16 +3,23 @@ Master Project ISEN 2024/2025
 
 ## Déploiment du backend SuperNanny sur un cluster Kubernetes
 
-**Prérequis**
+#### Prérequis ####
 
 Il est nécessaire d'installer Ansible pour déployer ce projet. 
 Vous pouvez suivre les indications en fonction de votre distribution en [cliquant ici](https://docs.ansible.com/ansible/latest/installation_guide/installation_distros.html).
 
-**Master Node**
+#### Master Node ####
+Créez une première VM linux. 
 
+Une fois créé : 
 
+```ansible-playbook masternode.yaml --ask-become-pass```
 
-**Ansible Vault**
+Voilà votre master node est créé. 
+
+Il est nécessaire que vous sauvegardiez les données affichées dans la tâche _Données sensibles à conserver_. Nous vous expliquons ou les conserver dans la section suivante. 
+
+#### Ansible Vault ####
 
 Pour continuer, vous devez créer une nouvelle VM linux. Cette nouvelle VM sera votre worker node. 
 
@@ -44,7 +51,7 @@ Une fois le mot de passe entré, saisissez ces lignes :
 
 > Si vous ne souhaitez pas utiliser Ansible Vault, vous devrez modifier la ligne kubeadm join du playbook workernode ansible.
 
-**Worker Node**
+#### Worker Node ####
 
 Si vous avez bien suivi les étapes précédentes il ne vous reste plus qu'à lancer le playbook _workernode.yaml_ en utilisant la commande suivante : 
 
