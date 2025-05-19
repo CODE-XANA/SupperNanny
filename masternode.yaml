@@ -17,6 +17,7 @@
       command: sed -i '/swap/ s/^/#/' /etc/fstab
 
     - name: Configuration réseau nécessaire 1 - charger br_netfilter
+      become: true
       ansible.builtin.copy:
         dest: /etc/modules-load.d/k8s.conf
         content: |
@@ -26,6 +27,7 @@
           mode: '0644'
 
     - name: Configuration réseau nécessaire 2 - sysctl params
+      become: true
       ansible.builtin.copy:
         dest: /etc/sysctl.d/k8s.conf
         content: |
@@ -200,7 +202,7 @@
 
     - name: Créer les ressources personnalisées de Calico
       ansible.builtin.command:
-        cmd: kubectl create -f custom-resources.yaml
+        cmd: kubectl create -f ~/custom-resources.yaml
       register: create_custom_resources_result
 
     - name: Surveiller les pods dans le namespace calico-system
