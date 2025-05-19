@@ -205,19 +205,14 @@
         cmd: kubectl create -f ~/custom-resources.yaml
       register: create_custom_resources_result
 
-    - name: Surveiller les pods dans le namespace calico-system
-      ansible.builtin.shell: |
-        kubectl get pods -n calico-system
-      register: watch_pods_result
-      until: "'calico' in watch_pods_result.stdout"  # Tu peux ajuster cette condition selon ce que tu veux surveiller.
-      retries: 30
-      delay: 10
-      failed_when: false  # Ignorer l'échec si le nombre d'essais est épuisé.
-      changed_when: false  # Nous ne voulons pas marquer cette tâche comme ayant changé.
+    - name: Redémarrer containerd
+      become: true
+      ansible.builtin.service:
+        name: containerd
+        state: restarted
 
-    - name: Vérifier que le cluster fonctionne correctement
-      ansible.builtin.command:
-        cmd: kubectl get nodes && kubectl get pods -A
-      when: not ansible_check_mode
-      register: kubectl_status_result
-      failed_when: kubectl_status_result.rc != 0
+    - name: Redémarrer kubelet
+      become: true
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
