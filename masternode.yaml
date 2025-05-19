@@ -182,7 +182,6 @@
         group: "{{ ansible_user_gid }}"
 
     - name: Copier le fichier admin.conf vers ~/.kube/config
-      become: true
       ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
         dest: "{{ ansible_env.HOME }}/.kube/config"
