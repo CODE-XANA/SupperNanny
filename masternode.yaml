@@ -157,6 +157,22 @@
       debug:
         msg: "{{ kubeadm_init_result.stdout }}"
 
+    - name: Attendre que le port 6443 (API server) soit ouvert
+      ansible.builtin.wait_for:
+        port: 6443
+        host: 127.0.0.1
+        timeout: 60
+
+    - name: Attendre que le nœud Kubernetes soit Ready
+      ansible.builtin.shell: |
+        for i in {1..20}; do
+        kubectl get nodes | grep -q ' Ready ' && break
+        echo "En attente du nœud en état Ready..."
+        sleep 10
+        done
+      register: node_ready_check
+      changed_when: false
+
     - name: Créer le répertoire .kube dans le home de l'utilisateur courant
       ansible.builtin.file:
         path: "{{ ansible_env.HOME }}/.kube"
