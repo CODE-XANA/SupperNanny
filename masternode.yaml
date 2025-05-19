@@ -145,10 +145,16 @@
       command: apt-mark hold kubelet kubeadm kubectl
       when: not ansible_check_mode
 
-    - name: Initialiser le cluster en ignorant certaines erreurs
+    - name: Récupérer l'adresse IP primaire de l'interface par défaut
+      ansible.builtin.shell: |
+        ip route get 1.1.1.1 | grep -oP 'src \K[0-9\.]+'
+      register: default_ip
+      changed_when: false
+
+    - name: Initialiser le cluster dynamiquement
       become: true
       ansible.builtin.command:
-        cmd: kubeadm init --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=FileAvailable,Port-10250,DirAvailable
+        cmd: kubeadm init --apiserver-advertise-address={{ default_ip.stdout }} --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=FileAvailable,Port-10250,DirAvailable
       register: kubeadm_init_result
       failed_when: kubeadm_init_result.rc != 0 and "'Your Kubernetes control-plane has initialized successfully!' not in kubeadm_init_result.stdout"
       changed_when: "'Your Kubernetes control-plane has initialized successfully!' in kubeadm_init_result.stdout"
@@ -182,6 +188,7 @@
         group: "{{ ansible_user_gid }}"
 
     - name: Copier le fichier admin.conf vers ~/.kube/config
+      become: true
       ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
         dest: "{{ ansible_env.HOME }}/.kube/config"
@@ -194,6 +201,16 @@
     - name: Vérifier le répertoire .kube
       debug:
         msg: "Le répertoire .kube est situé ici : {{ ansible_env.HOME }}/.kube"
+
+    - name: Attendre que kubectl réponde
+      shell: |
+        for i in {1..20}; do
+          kubectl version --request-timeout='5s' &>/dev/null && break
+          echo "En attente que kubectl réponde..."
+          sleep 5
+        done
+      register: kubectl_ready
+      changed_when: false
 
     - name: Créer les CRDs de Calico
       ansible.builtin.command:
