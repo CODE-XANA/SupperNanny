@@ -151,6 +151,20 @@
       register: default_ip
       changed_when: false
 
+    - name: Modifier --listen-client-urls dans etcd.yaml
+      lineinfile:
+        path: /etc/kubernetes/manifests/etcd.yaml
+        regexp: '--listen-client-urls='
+        line: "- --listen-client-urls=https://{{ default_ip.stdout }}:2379"
+       become: true
+
+    - name: Modifier --advertise-client-urls dans etcd.yaml
+      lineinfile:
+        path: /etc/kubernetes/manifests/etcd.yaml
+        regexp: '--advertise-client-urls='
+        line: "- --advertise-client-urls=https://{{ default_ip.stdout }}:2379"
+      become: true
+
     - name: Initialiser le cluster dynamiquement
       become: true
       ansible.builtin.command:
