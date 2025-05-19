@@ -14,7 +14,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Required for proper tag detection
+          fetch-depth: 0  # Ensures access to tags
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -25,12 +25,12 @@ jobs:
       - name: Add WebAssembly target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Install and verify trunk
+      - name: Install Trunk
         run: |
           cargo install --locked trunk
           trunk --version
 
-      - name: Build frontend with trunk
+      - name: Build frontend with Trunk (release)
         working-directory: SuperNanny_front/frontend
         run: |
           trunk build --release
@@ -51,10 +51,11 @@ jobs:
           cargo build --release --manifest-path=supernanny_service/Cargo.toml
           ls -lh supernanny_service/target/release/
 
-      - name: Build static_server
+      - name: Build static_server (release)
         run: |
           cargo build --release --manifest-path=SuperNanny_front/static_server/Cargo.toml
           ls -lh SuperNanny_front/target/release/
+          test -f SuperNanny_front/target/release/static_server
 
       - name: Prepare release directory
         run: |
