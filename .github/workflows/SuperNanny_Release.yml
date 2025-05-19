@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Required for proper tag detection
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -23,27 +25,40 @@ jobs:
       - name: Add WebAssembly target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Install trunk
-        run: cargo install --locked trunk
-
-      - name: Build rust-landlock-main
-        run: cargo build --release --manifest-path=rust-landlock-main/Cargo.toml
-
-      - name: Build SuperNanny_api
-        run: cargo build --release --manifest-path=SuperNanny_api/Cargo.toml
-
-      - name: Build supernanny_service
-        run: cargo build --release --manifest-path=supernanny_service/Cargo.toml
-
-      - name: Build static_server
-        run: cargo build --release --manifest-path=SuperNanny_front/static_server/Cargo.toml
+      - name: Install and verify trunk
+        run: |
+          cargo install --locked trunk
+          trunk --version
 
       - name: Build frontend with trunk
         working-directory: SuperNanny_front/frontend
-        run: trunk build --release
+        run: |
+          trunk build --release
+          ls -lh dist/
+
+      - name: Build rust-landlock-main
+        run: |
+          cargo build --release --manifest-path=rust-landlock-main/Cargo.toml
+          ls -lh rust-landlock-main/target/release/
+
+      - name: Build SuperNanny_api
+        run: |
+          cargo build --release --manifest-path=SuperNanny_api/Cargo.toml
+          ls -lh SuperNanny_api/target/release/
+
+      - name: Build supernanny_service
+        run: |
+          cargo build --release --manifest-path=supernanny_service/Cargo.toml
+          ls -lh supernanny_service/target/release/
+
+      - name: Build static_server
+        run: |
+          cargo build --release --manifest-path=SuperNanny_front/static_server/Cargo.toml
+          ls -lh SuperNanny_front/target/release/
 
       - name: Prepare release directory
         run: |
+          set -e
           mkdir -p release/sandboxer
           mkdir -p release/SuperNanny_api
           mkdir -p release/supernanny_service
