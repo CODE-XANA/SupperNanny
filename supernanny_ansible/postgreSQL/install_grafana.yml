@@ -1,16 +1,13 @@
----
 - name: Install and configure Grafana
   hosts: supernanny
   become: true
-
   vars:
-    grafana_repo: "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main"
-    grafana_repo_key_url: "https://apt.grafana.com/gpg.key"
-    db_host: "localhost"
+    grafana_repo: "deb [signed-by=/usr/share/keyrings/grafana-archive-keyring.gpg] https://packages.grafana.com/oss/deb stable main"
+    grafana_repo_key_url: "https://packages.grafana.com/gpg.key"
+    db_host: "127.0.0.1"
     db_name: "sandboxdb"
     db_user: "sandboxuser"
     db_password: "supernanny"
-
   tasks:
     - name: Install required APT packages
       apt:
@@ -21,11 +18,17 @@
           - gnupg2
         update_cache: yes
 
-    - name: Download Grafana GPG key
-      get_url:
-        url: "{{ grafana_repo_key_url }}"
-        dest: /usr/share/keyrings/grafana.gpg
-        mode: '0644'
+    - name: Create keyring directory
+      file:
+        path: /usr/share/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download and import Grafana GPG key
+      shell: |
+        wget -q -O - {{ grafana_repo_key_url }} | gpg --dearmor | tee /usr/share/keyrings/grafana-archive-keyring.gpg > /dev/null
+      args:
+        creates: /usr/share/keyrings/grafana-archive-keyring.gpg
 
     - name: Add Grafana APT repository
       apt_repository:
@@ -39,7 +42,7 @@
 
     - name: Install Grafana
       apt:
-        name: grafana
+        name: grafana-enterprise
         state: present
 
     - name: Ensure Grafana service is started and enabled
