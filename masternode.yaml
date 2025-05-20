@@ -42,7 +42,6 @@
       become: true
       ansible.builtin.command: sysctl --system
 
-
     - name: Installation paquets
       become: true
       ansible.builtin.apt:
@@ -145,14 +144,8 @@
       command: apt-mark hold kubelet kubeadm kubectl
       when: not ansible_check_mode
 
-    - name: Récupérer l'adresse IP primaire de l'interface par défaut
-      ansible.builtin.shell: |
-        ip route get 1.1.1.1 | grep -oP 'src \K[0-9\.]+'
-      register: default_ip
-      changed_when: false
-
-    - name: Récupérer l'adresse IP primaire de l'interface par défaut
-      shell: ip route get 1.1.1.1 | grep -oP 'src \K[0-9\.]+'
+    - name: Récupérer une IP non-loopback
+      shell: hostname -I | awk '{print $1}'
       register: default_ip
       changed_when: false
 
