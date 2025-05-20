@@ -7,7 +7,7 @@ COPY . .
 # Install common native build dependencies
 RUN apt-get update && apt-get install -y pkg-config libssl-dev clang build-essential
 
-RUN cargo build --release supernanny_service --verbose
+RUN cargo build --release --verbose
 
 # Stage 2: Minimal runtime image
 FROM debian:bullseye-slim
