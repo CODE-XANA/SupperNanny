@@ -4,15 +4,15 @@
   become: true
 
   vars:
-    grafana_repo: "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://packages.grafana.com/oss/deb stable main"
-    grafana_repo_key_url: "https://packages.grafana.com/gpg.key"
+    grafana_repo: "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://apt.grafana.com stable main"
+    grafana_repo_key_url: "https://apt.grafana.com/gpg.key"
     db_host: "localhost"
     db_name: "sandboxdb"
     db_user: "sandboxuser"
     db_password: "supernanny"
 
   tasks:
-    - name: Install APT transport and tools
+    - name: Install required APT packages
       apt:
         name:
           - apt-transport-https
@@ -33,13 +33,16 @@
         state: present
         filename: grafana
 
+    - name: Update APT cache after adding Grafana repo
+      apt:
+        update_cache: yes
+
     - name: Install Grafana
       apt:
         name: grafana
         state: present
-        update_cache: yes
 
-    - name: Ensure Grafana is started and enabled
+    - name: Ensure Grafana service is started and enabled
       service:
         name: grafana-server
         state: started
