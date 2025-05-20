@@ -2,27 +2,16 @@
 FROM rust:1.76 AS builder
 WORKDIR /app
 
-# First, copy just the Cargo.toml and Cargo.lock (if it exists)
-# This allows better use of Docker's layer caching
-COPY Cargo.toml ./
-# Copy Cargo.lock if it exists
-COPY Cargo.lock* ./
-
-# Create dummy source file to build dependencies
-RUN mkdir -p src && \
-    echo "fn main() {println!(\"dummy\")}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src
-
-# Now copy the actual source code
-COPY src/ ./src/
-COPY build.rs* ./
-
-# Install build dependencies
+# Install build dependencies first
 RUN apt-get update && apt-get install -y pkg-config libssl-dev
 
+# Copy the entire project
+COPY . .
+
 # Debug: List contents to verify files are where we expect
-RUN ls -la && ls -la src/
+RUN ls -la && \
+    if [ -d "src" ]; then ls -la src/; fi && \
+    if [ -f "Cargo.toml" ]; then cat Cargo.toml; fi
 
 # Build the application
 RUN cargo build --release --verbose
