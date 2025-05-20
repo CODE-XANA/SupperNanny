@@ -1,36 +1,49 @@
+# ──────────────────────────────────────────────────────────────
 # Stage 1: Build Yew frontend with Trunk
+# ──────────────────────────────────────────────────────────────
 FROM rust:latest AS yew_builder
 
-WORKDIR /frontend
-COPY ../frontend .
+WORKDIR /app
 
-# Install trunk and wasm target
-RUN cargo install --locked trunk && \
-    rustup target add wasm32-unknown-unknown && \
-    trunk build --release
+# Copy only the frontend directory
+COPY ./frontend ./frontend
 
-# Stage 2: Build static_server binary
+# Install Trunk and WebAssembly target
+RUN cargo install --locked trunk \
+ && rustup target add wasm32-unknown-unknown \
+ && cd frontend \
+ && trunk build --release
+
+# ──────────────────────────────────────────────────────────────
+# Stage 2: Build the static_server Rust backend
+# ──────────────────────────────────────────────────────────────
 FROM rust:latest AS server_builder
 
-WORKDIR /static_server
-COPY . .
+WORKDIR /app
 
-# Install dependencies required for building
+# Copy only the static_server crate
+COPY ./static_server ./static_server
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y pkg-config libssl-dev clang build-essential
 
-RUN cargo build --release --verbose
+# Build the static_server binary
+RUN cd static_server && cargo build --release --verbose
 
-# Stage 3: Final runtime image
+# ──────────────────────────────────────────────────────────────
+# Stage 3: Runtime image
+# ──────────────────────────────────────────────────────────────
 FROM debian:bullseye-slim
 
-# Copy the compiled static files
-COPY --from=yew_builder /frontend/dist /var/www
+# Copy compiled frontend files
+COPY --from=yew_builder /app/frontend/dist /var/www
 
-# Copy the static_server binary
-COPY --from=server_builder /static_server/target/release/static_server /usr/local/bin/static_server
+# Copy compiled Rust binary
+COPY --from=server_builder /app/static_server/target/release/static_server /usr/local/bin/static_server
 
 WORKDIR /usr/local/bin
 
+# Tell the server where to find static files
 ENV STATIC_DIR=/var/www
 
 ENTRYPOINT ["./static_server"]
