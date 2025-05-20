@@ -1,5 +1,5 @@
 # Stage 1: Build the binary
-FROM rust:1.76 AS builder
+FROM rust:latest AS builder
 
 WORKDIR /app
 COPY . .
@@ -8,7 +8,7 @@ COPY . .
 RUN apt-get update && apt-get install -y pkg-config libssl-dev clang build-essential strace
 
 # Build the release binary with logs
-RUN bash -c 'cargo build --release --verbose || { echo "💥 Build failed"; exit 1; }'
+RUN cargo build --release --verbose
 
 # Stage 2: Create minimal runtime image
 FROM debian:bullseye-slim
