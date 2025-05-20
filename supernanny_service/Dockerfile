@@ -1,5 +1,5 @@
 # Stage 1: Build the binary
-FROM rust:1.82 AS builder
+FROM rust:latest AS builder
 
 WORKDIR /app
 COPY . .
