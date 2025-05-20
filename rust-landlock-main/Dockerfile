@@ -8,12 +8,12 @@ COPY . .
 RUN apt-get update && apt-get install -y pkg-config libssl-dev clang build-essential strace
 
 # Build the release binary with logs
-RUN cargo build --release --verbose
+RUN cargo build --release
 
 # Stage 2: Create minimal runtime image
 FROM debian:bullseye-slim
 
-COPY --from=builder /app/target/release/supernanny_sandboxer /usr/local/bin/supernanny_sandboxer
+COPY --from=builder /app/target/release/sandboxer_db /usr/local/bin/supernanny_sandboxer
 
 WORKDIR /usr/local/bin
 
