@@ -9,7 +9,11 @@ Il est nécessaire d'installer Ansible pour déployer ce projet.
 Vous pouvez suivre les indications en fonction de votre distribution en [cliquant ici](https://docs.ansible.com/ansible/latest/installation_guide/installation_distros.html).
 
 #### Master Node ####
-Créez une première VM linux. 
+Créez une première VM linux, voici les configurations minimum nécessaire : 
+
+- 2 vCPU
+- 4 Go RAM 
+- 20 Go disque
 
 Une fois créé : 
 
