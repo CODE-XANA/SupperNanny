@@ -8,7 +8,7 @@ COPY . .
 RUN apt-get update && apt-get install -y pkg-config libssl-dev clang build-essential strace
 
 # Build the release binary with logs
-RUN cargo build --release --verbose
+RUN bash -c 'cargo build --release --verbose || { echo "💥 Build failed"; exit 1; }'
 
 # Stage 2: Create minimal runtime image
 FROM debian:bullseye-slim
