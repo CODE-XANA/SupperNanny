@@ -151,24 +151,30 @@
       register: default_ip
       changed_when: false
 
-    - name: Modifier --listen-client-urls dans etcd.yaml
-      lineinfile:
-        path: /etc/kubernetes/manifests/etcd.yaml
-        regexp: '--listen-client-urls='
-        line: "- --listen-client-urls=https://{{ default_ip.stdout }}:2379"
-       become: true
+    - name: Récupérer l'adresse IP primaire de l'interface par défaut
+      shell: ip route get 1.1.1.1 | grep -oP 'src \K[0-9\.]+'
+      register: default_ip
+      changed_when: false
 
-    - name: Modifier --advertise-client-urls dans etcd.yaml
-      lineinfile:
-        path: /etc/kubernetes/manifests/etcd.yaml
-        regexp: '--advertise-client-urls='
-        line: "- --advertise-client-urls=https://{{ default_ip.stdout }}:2379"
+    - name: Générer un fichier de configuration kubeadm
+      copy:
+        dest: /tmp/kubeadm-config.yaml
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: "{{ default_ip.stdout }}"
+            bindPort: 6443
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: ClusterConfiguration
+          networking:
+            podSubnet: 192.168.0.0/16
       become: true
 
-    - name: Initialiser le cluster dynamiquement
+    - name: Initialiser le cluster avec kubeadm-config.yaml
       become: true
-      ansible.builtin.command:
-        cmd: kubeadm init --apiserver-advertise-address={{ default_ip.stdout }} --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=FileAvailable,Port-10250,DirAvailable
+      command: kubeadm init --config=/tmp/kubeadm-config.yaml --ignore-preflight-errors=FileAvailable,Port-10250,DirAvailable
       register: kubeadm_init_result
       failed_when: kubeadm_init_result.rc != 0 and "'Your Kubernetes control-plane has initialized successfully!' not in kubeadm_init_result.stdout"
       changed_when: "'Your Kubernetes control-plane has initialized successfully!' in kubeadm_init_result.stdout"
