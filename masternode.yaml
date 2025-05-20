@@ -1,4 +1,4 @@
-- name: Setup Kubernetes Masternode
+- name: Configurer le nœud maître Kubernetes
   hosts: localhost
   become: true
   vars:
@@ -7,23 +7,23 @@
 
   tasks:
 
-  - name: Update and upgrade system
+  - name: Mettre à jour et upgrader le système
     apt:
       update_cache: yes
       upgrade: dist
 
-  - name: Disable swap in fstab
+  - name: Désactiver le swap dans le fichier fstab
     lineinfile:
       path: /etc/fstab
       regexp: '^\s*/swap'
       state: absent
 
-  - name: Load br_netfilter module
+  - name: Charger le module br_netfilter
     copy:
       dest: /etc/modules-load.d/k8s.conf
       content: "br_netfilter\n"
 
-  - name: Apply sysctl settings for Kubernetes
+  - name: Appliquer les paramètres sysctl pour Kubernetes
     copy:
       dest: /etc/sysctl.d/k8s.conf
       content: |
@@ -31,37 +31,37 @@
         net.ipv4.ip_forward = 1
         net.bridge.bridge-nf-call-ip6tables = 1
 
-  - name: Reload sysctl
+  - name: Recharger sysctl
     command: sysctl --system
 
-  - name: Install containerd
+  - name: Installer containerd
     apt:
       name: containerd
       state: present
 
-  - name: Create containerd config directory
+  - name: Créer le répertoire de configuration de containerd
     file:
       path: /etc/containerd
       state: directory
 
-  - name: Generate default containerd config
+  - name: Générer la configuration par défaut de containerd
     shell: containerd config default > /etc/containerd/config.toml
     args:
       creates: /etc/containerd/config.toml
 
-  - name: Enable SystemdCgroup in containerd config
+  - name: Activer SystemdCgroup dans la configuration de containerd
     replace:
       path: /etc/containerd/config.toml
       regexp: '^(\s*SystemdCgroup\s*=\s*)false'
       replace: '\1true'
 
-  - name: Restart and enable containerd
+  - name: Redémarrer et activer containerd
     systemd:
       name: containerd
       enabled: true
       state: restarted
 
-  - name: Install Kubernetes dependencies
+  - name: Installer les dépendances de Kubernetes
     apt:
       name:
         - apt-transport-https
@@ -69,7 +69,7 @@
         - curl
       state: present
 
-  - name: Add Kubernetes apt key
+  - name: Ajouter la clé APT de Kubernetes
     shell: |
       mkdir -p -m 755 /etc/apt/keyrings
       curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | \
@@ -77,17 +77,17 @@
     args:
       creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-  - name: Add Kubernetes repository
+  - name: Ajouter le dépôt Kubernetes
     copy:
       dest: /etc/apt/sources.list.d/kubernetes.list
       content: |
         deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /
 
-  - name: Update apt cache for Kubernetes
+  - name: Mettre à jour le cache APT pour Kubernetes
     apt:
       update_cache: yes
 
-  - name: Install Kubernetes components
+  - name: Installer les composants de Kubernetes
     apt:
       name:
         - kubelet
@@ -95,25 +95,29 @@
         - kubectl
       state: present
 
-  - name: Hold Kubernetes packages (apt-mark hold)
+  - name: Geler les paquets Kubernetes avec apt-mark hold
     command: apt-mark hold {{ item }}
     loop:
       - kubelet
       - kubeadm
       - kubectl
 
-  - name: Enable kubelet service
+  - name: Activer le service kubelet
     systemd:
       name: kubelet
       enabled: true
       state: started
 
-  - name: Initialize Kubernetes cluster
+  - name: Initialiser le cluster Kubernetes
     command: kubeadm init --pod-network-cidr={{ pod_network_cidr }}
     register: kubeadm_output
     changed_when: "'already initialized' not in kubeadm_output.stdout"
 
-  - name: Set up kubeconfig for user
+  - name: Afficher la sortie de la commande kubeadm init
+    debug:
+      msg: "{{ kubeadm_output.stdout_lines }}"
+
+  - name: Configurer le fichier kubeconfig pour l'utilisateur
     shell: |
       mkdir -p $HOME/.kube
       cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
@@ -121,32 +125,32 @@
     args:
       executable: /bin/bash
 
-  - name: Install Kubernetes Python client
+  - name: Installer le client Python de Kubernetes
     apt:
       name: python3-kubernetes
       state: present
 
-  - name: Deploy Calico CRDs
+  - name: Déployer les CRDs de Calico
     kubernetes.core.k8s:
       state: present
       src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
 
-  - name: Deploy Calico Operator
+  - name: Déployer l'opérateur Calico
     kubernetes.core.k8s:
       state: present
       src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
 
-  - name: Download Calico custom resources
+  - name: Télécharger les ressources personnalisées de Calico
     get_url:
       url: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml
       dest: /tmp/custom-resources.yaml
 
-  - name: Apply Calico custom resources
+  - name: Appliquer les ressources personnalisées de Calico
     kubernetes.core.k8s:
       state: present
       src: /tmp/custom-resources.yaml
 
-  - name: Wait for Kubernetes node to be Ready
+  - name: Attendre que le nœud Kubernetes soit en état Ready
     shell: kubectl get nodes --no-headers | grep -q ' Ready '
     register: node_ready_check
     retries: 20
@@ -154,12 +158,12 @@
     until: node_ready_check.rc == 0
     changed_when: false
 
-  - name: Display Kubernetes nodes status
+  - name: Afficher l'état des nœuds Kubernetes
     shell: kubectl get nodes
     register: kube_nodes_output
     changed_when: false
 
-  - name: Show cluster nodes output
+  - name: Afficher la sortie de la commande kubectl get nodes
     debug:
       msg: "{{ kube_nodes_output.stdout_lines }}"
 
