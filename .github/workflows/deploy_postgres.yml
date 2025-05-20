@@ -1,0 +1,59 @@
+name: Deploy PostgreSQL with SuperNanny schema
+
+on:
+  push:
+    paths:
+      - .github/workflows/deploy_postgres.yml
+      - '**/Dockerfile'
+      - '**/*.sql'
+
+jobs:
+  deploy-postgres:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: sandboxuser
+          POSTGRES_PASSWORD: supernanny
+          POSTGRES_DB: sandboxdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sandboxuser"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          echo "Waiting for PostgreSQL to become available..."
+          for i in {1..10}; do
+            pg_isready -h localhost -U sandboxuser && break
+            sleep 5
+          done
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Download SuperNanny schema
+        run: curl -sSL https://raw.githubusercontent.com/CODE-XANA/SupperNanny/main/rust-landlock-main/queries_sql/full_script.sql -o schema.sql
+
+      - name: Load schema into PostgreSQL
+        env:
+          PGPASSWORD: supernanny
+        run: psql -h localhost -U sandboxuser -d sandboxdb -f schema.sql
+
+      - name: Grant privileges
+        env:
+          PGPASSWORD: supernanny
+        run: |
+          psql -h localhost -U sandboxuser -d sandboxdb <<EOF
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sandboxuser;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO sandboxuser;
+          EOF
