@@ -1,4 +1,6 @@
----
+# ── Play 0: Prepare the system (update, upgrade, install git) ────────
+- import_playbook: prepare_system.yml
+
 # ── Play 1: Clone repository ─────────────────────────────────────────
 - name: Fetch SuperNanny source
   hosts: supernanny
@@ -26,7 +28,6 @@
         force:  yes
 
 # ── Remaining stack ──────────────────────────────────────────────────
-- import_playbook: prepare_system.yml
 - import_playbook: postgreSQL/init_postgresql.yml
 - import_playbook: postgreSQL/install_grafana.yml
 - import_playbook: Rust/install_rust.yml
