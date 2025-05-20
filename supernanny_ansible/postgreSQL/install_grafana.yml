@@ -4,7 +4,7 @@
   become: true
 
   vars:
-    grafana_repo: "deb https://packages.grafana.com/oss/deb stable main"
+    grafana_repo: "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://packages.grafana.com/oss/deb stable main"
     grafana_repo_key_url: "https://packages.grafana.com/gpg.key"
     db_host: "localhost"
     db_name: "sandboxdb"
@@ -12,9 +12,13 @@
     db_password: "supernanny"
 
   tasks:
-    - name: Install dependencies
+    - name: Install APT transport and tools
       apt:
-        name: [apt-transport-https, software-properties-common, wget, gnupg2]
+        name:
+          - apt-transport-https
+          - software-properties-common
+          - wget
+          - gnupg2
         update_cache: yes
 
     - name: Download Grafana GPG key
@@ -25,13 +29,6 @@
 
     - name: Add Grafana APT repository
       apt_repository:
-        repo: "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://packages.grafana.com/oss/deb stable main"
-        state: present
-        filename: grafana
-
-
-    - name: Add Grafana APT repository
-      apt_repository:
         repo: "{{ grafana_repo }}"
         state: present
         filename: grafana
@@ -39,8 +36,8 @@
     - name: Install Grafana
       apt:
         name: grafana
-        update_cache: yes
         state: present
+        update_cache: yes
 
     - name: Ensure Grafana is started and enabled
       service:
@@ -57,11 +54,11 @@
             - name: PostgreSQL
               type: postgres
               access: proxy
-              url: {{ db_host }}:5432
-              database: {{ db_name }}
-              user: {{ db_user }}
+              url: "{{ db_host }}:5432"
+              database: "{{ db_name }}"
+              user: "{{ db_user }}"
               secureJsonData:
-                password: {{ db_password }}
+                password: "{{ db_password }}"
               jsonData:
                 sslmode: disable
                 postgresVersion: 1200
