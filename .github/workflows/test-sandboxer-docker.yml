@@ -24,32 +24,51 @@ jobs:
       
       - name: Debug project structure
         run: |
-          echo "Current directory contents:"
+          echo "=== CURRENT DIRECTORY CONTENTS ==="
           ls -la
-          echo "rust-landlock-main directory contents:"
-          ls -la ./rust-landlock-main || echo "Directory not found"
-          echo "Checking for Cargo.toml:"
-          find . -name "Cargo.toml"
+          echo "=== CHECKING ALL DIRECTORIES ==="
+          find . -type d -maxdepth 2 | sort
+          echo "=== CHECKING FOR CARGO.TOML ==="
+          find . -name "Cargo.toml" | sort
+          echo "=== CHECKING FOR RUST FILES ==="
+          find . -name "*.rs" | head -10
       
-      - name: Build sandboxer Docker image
+      - name: Build sandboxer Docker image with extensive debugging
         run: |
           # Determine which directory contains the Rust project
-          if [ -f "./rust-landlock-main/Cargo.toml" ]; then
-            PROJECT_DIR="./rust-landlock-main"
-          elif [ -f "./Cargo.toml" ]; then
-            PROJECT_DIR="."
-          else
-            # Check one level deeper
-            PROJECT_DIR=$(find . -name "Cargo.toml" -not -path "*/target/*" | head -1 | xargs dirname || echo "")
-            if [ -z "$PROJECT_DIR" ]; then
-              echo "ERROR: Could not find Cargo.toml in repository"
-              exit 1
-            fi
+          CARGO_FILES=$(find . -name "Cargo.toml" -not -path "*/target/*" | sort)
+          
+          if [ -z "$CARGO_FILES" ]; then
+            echo "ERROR: No Cargo.toml found in repository"
+            echo "=== LISTING ALL FILES ==="
+            find . -type f | grep -v "/\.git/" | sort
+            exit 1
           fi
           
-          echo "Building Docker image from directory: $PROJECT_DIR"
+          echo "Found Cargo.toml files in:"
+          echo "$CARGO_FILES"
+          
+          # Choose the first Cargo.toml file found
+          PROJECT_DIR=$(dirname "$(echo "$CARGO_FILES" | head -1)")
+          
+          echo "=== BUILDING FROM DIRECTORY: $PROJECT_DIR ==="
+          echo "Directory contents:"
+          ls -la "$PROJECT_DIR"
+          
+          if [ -d "$PROJECT_DIR/src" ]; then
+            echo "src directory contents:"
+            ls -la "$PROJECT_DIR/src"
+          else
+            echo "WARNING: No src directory found in $PROJECT_DIR"
+          fi
+          
+          echo "Cargo.toml contents:"
+          cat "$PROJECT_DIR/Cargo.toml"
+          
+          echo "=== BUILDING DOCKER IMAGE ==="
           cd "$PROJECT_DIR"
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/supernanny-sandboxer:latest .
+          # Use DOCKER_BUILDKIT for better debugging output
+          DOCKER_BUILDKIT=1 docker build --progress=plain -t ${{ secrets.DOCKER_USERNAME }}/supernanny-sandboxer:latest .
         
       - name: Tag image with version (if tag triggered)
         if: startsWith(github.ref, 'refs/tags/')
