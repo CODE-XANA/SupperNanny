@@ -1,82 +1,41 @@
 name: Build & Push Sandboxer Image
+
 on:
   push:
     branches:
       - main
     tags:
       - "v*"
+
 jobs:
   sandboxer-docker:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-        
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-          
-      - name: Set version tag
+
+      - name: Extract release version
         id: version
         run: echo "RELEASE_TAG=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
-      
-      - name: Debug project structure
+
+      - name: Build sandboxer Docker image
         run: |
-          echo "=== CURRENT DIRECTORY CONTENTS ==="
-          ls -la
-          echo "=== CHECKING ALL DIRECTORIES ==="
-          find . -type d -maxdepth 2 | sort
-          echo "=== CHECKING FOR CARGO.TOML ==="
-          find . -name "Cargo.toml" | sort
-          echo "=== CHECKING FOR RUST FILES ==="
-          find . -name "*.rs" | head -10
-      
-      - name: Build sandboxer Docker image with extensive debugging
-        run: |
-          # Determine which directory contains the Rust project
-          CARGO_FILES=$(find . -name "Cargo.toml" -not -path "*/target/*" | sort)
-          
-          if [ -z "$CARGO_FILES" ]; then
-            echo "ERROR: No Cargo.toml found in repository"
-            echo "=== LISTING ALL FILES ==="
-            find . -type f | grep -v "/\.git/" | sort
-            exit 1
-          fi
-          
-          echo "Found Cargo.toml files in:"
-          echo "$CARGO_FILES"
-          
-          # Choose the first Cargo.toml file found
-          PROJECT_DIR=$(dirname "$(echo "$CARGO_FILES" | head -1)")
-          
-          echo "=== BUILDING FROM DIRECTORY: $PROJECT_DIR ==="
-          echo "Directory contents:"
-          ls -la "$PROJECT_DIR"
-          
-          if [ -d "$PROJECT_DIR/src" ]; then
-            echo "src directory contents:"
-            ls -la "$PROJECT_DIR/src"
-          else
-            echo "WARNING: No src directory found in $PROJECT_DIR"
-          fi
-          
-          echo "Cargo.toml contents:"
-          cat "$PROJECT_DIR/Cargo.toml"
-          
-          echo "=== BUILDING DOCKER IMAGE ==="
-          cd "$PROJECT_DIR"
-          # Use DOCKER_BUILDKIT for better debugging output
-          DOCKER_BUILDKIT=1 docker build --progress=plain -t ${{ secrets.DOCKER_USERNAME }}/supernanny-sandboxer:latest .
-        
-      - name: Tag image with version (if tag triggered)
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/supernanny-sandboxer:latest ./rust-landlock-main
+
+      - name: Tag image with version (if release)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           docker tag ${{ secrets.DOCKER_USERNAME }}/supernanny-sandboxer:latest \
             ${{ secrets.DOCKER_USERNAME }}/supernanny-sandboxer:${{ steps.version.outputs.RELEASE_TAG }}
-            
-      - name: Push image(s) to Docker Hub
+
+      - name: Push Docker image(s)
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/supernanny-sandboxer:latest
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
