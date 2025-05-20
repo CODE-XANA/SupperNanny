@@ -146,9 +146,20 @@
       state: present
       src: /tmp/custom-resources.yaml
 
-  - name: Wait for Kubernetes node to be ready
-    shell: |
-      sleep 120
-      kubectl get nodes
-    args:
-      executable: /bin/bash
+  - name: Wait for Kubernetes node to be Ready
+    shell: kubectl get nodes --no-headers | grep -q ' Ready '
+    register: node_ready_check
+    retries: 20
+    delay: 10
+    until: node_ready_check.rc == 0
+    changed_when: false
+
+  - name: Display Kubernetes nodes status
+    shell: kubectl get nodes
+    register: kube_nodes_output
+    changed_when: false
+
+  - name: Show cluster nodes output
+    debug:
+      msg: "{{ kube_nodes_output.stdout_lines }}"
+
