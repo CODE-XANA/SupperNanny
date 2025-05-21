@@ -4,10 +4,9 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-
 jobs:
-  setup:
-    name: Setup Rust Environment
+  rust-build:
+    name: Build and audit SuperNanny components
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -15,116 +14,30 @@ jobs:
       - name: Install Rust and tools
         run: |
           rustup update stable
-          rustup target add wasm32-unknown-unknown
           cargo install --locked trunk
           cargo install cargo-audit
-      # On sauvegarde l'environnement Rust pour les jobs suivants
-      - name: Cache Rust environment
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.rustup
-          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-
-  rust-landlock:
-    name: Build and audit rust-landlock-main
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Restore Rust environment
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.rustup
-          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build and audit rust-landlock-main
+      - name: Build rust-landlock-main
         working-directory: rust-landlock-main
         run: |
           cargo build --release
           cargo audit
-
-  supernanny-api:
-    name: Build and audit SuperNanny API
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Restore Rust environment
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.rustup
-          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build and audit SuperNanny API
+      - name: Build SuperNanny_api
         working-directory: SuperNanny_api
         run: |
           cargo build --release
           cargo audit
-
-  supernanny-service:
-    name: Build and audit supernanny service
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Restore Rust environment
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.rustup
-          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build and audit supernanny service
+      - name: Build supernanny_service
         working-directory: supernanny_service
         run: |
           cargo build --release
           cargo audit
-
-  frontend:
-    name: Build Yew frontend
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Restore Rust environment
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.rustup
-          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Add WebAssembly target
+        run: rustup target add wasm32-unknown-unknown
+        
       - name: Build Yew frontend with trunk
         working-directory: SuperNanny_front/frontend
         run: trunk build --release
-
-  static-server:
-    name: Build static server
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Restore Rust environment
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.rustup
-          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-      - name: Build static server
+      - name: Build static_server
         working-directory: SuperNanny_front/static_server
         run: cargo build --release
