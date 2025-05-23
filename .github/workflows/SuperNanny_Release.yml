@@ -1,5 +1,4 @@
 name: SuperNanny Release
-
 on:
   push:
     tags:
@@ -12,73 +11,72 @@ jobs:
   build-and-release:
     name: Build and publish precompiled binaries
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Ensures access to tags
-
+          fetch-depth: 0  
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-
       - name: Add WebAssembly target
         run: rustup target add wasm32-unknown-unknown
-
       - name: Install Trunk
         run: |
           cargo install --locked trunk
           trunk --version
-
       - name: Build frontend with Trunk (release)
         working-directory: SuperNanny_front/frontend
         run: |
           trunk build --release
           ls -lh dist/
-
       - name: Build rust-landlock-main
         run: |
           cargo build --release --manifest-path=rust-landlock-main/Cargo.toml
           ls -lh rust-landlock-main/target/release/
-
       - name: Build SuperNanny_api
         run: |
           cargo build --release --manifest-path=SuperNanny_api/Cargo.toml
           ls -lh SuperNanny_api/target/release/
-
       - name: Build supernanny_service
         run: |
           cargo build --release --manifest-path=supernanny_service/Cargo.toml
           ls -lh supernanny_service/target/release/
-
       - name: Build static_server (release)
         run: |
           cargo build --release --manifest-path=SuperNanny_front/static_server/Cargo.toml
           ls -lh SuperNanny_front/target/release/
           test -f SuperNanny_front/target/release/static_server
-
+      - name: Extract version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
       - name: Prepare release directory
         run: |
           set -e
-          mkdir -p release/sandboxer
-          mkdir -p release/SuperNanny_api
-          mkdir -p release/supernanny_service
-          mkdir -p release/frontend
-
-          cp rust-landlock-main/target/release/sandboxer_db release/sandboxer/
-          cp SuperNanny_api/target/release/SuperNanny_api release/SuperNanny_api/
-          cp supernanny_service/target/release/supernanny_service release/supernanny_service/
-          cp SuperNanny_front/target/release/static_server release/frontend/
-
+          mkdir -p release/bin
+          mkdir -p release/certs
+          
+          # Copy binaries to bin/ directory
+          cp rust-landlock-main/target/release/sandboxer_db release/bin/rust-landlock-main
+          cp SuperNanny_api/target/release/SuperNanny_api release/bin/SuperNanny_api
+          cp supernanny_service/target/release/supernanny_service release/bin/supernanny_service
+          cp SuperNanny_front/target/release/static_server release/bin/static_server
+          
+          # Copy certificates to certs/ directory
+          cp supernanny_service/dev-cert.pem release/certs/service-dev-cert.pem
+          cp SuperNanny_api/certs/dev-cert.pem release/certs/api-dev-cert.pem
+          cp SuperNanny_front/static_server/certs/dev-cert.pem release/certs/frontend-dev-cert.pem
+          
+          # Verify structure
+          echo "Release directory structure:"
+          tree release/ || find release/ -type f
       - name: Create tarball
-        run: tar -czvf supernanny-release.tar.gz -C release .
-
+        run: tar -czvf supernanny-binaries-${{ steps.get_version.outputs.VERSION }}.tar.gz -C release .
       - name: Upload release
         uses: softprops/action-gh-release@v1
         with:
-          files: supernanny-release.tar.gz
+          files: supernanny-binaries-${{ steps.get_version.outputs.VERSION }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
