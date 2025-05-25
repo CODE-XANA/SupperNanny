@@ -108,12 +108,11 @@
         name: python3-kubernetes
         state: present
 
-    - name: Détecter le HOME réel de l'utilisateur non-root
+    - name: Set user_home using ansible_facts
       become: false
       set_fact:
-        user_home: "/home/{{ ansible_user }}"
-      when: ansible_user != 'root'
-
+        user_home: "/home/{{ ansible_facts['user_id'] }}"
+      when: ansible_facts['user_id'] != 'root'
 
     - name: Déployer les CRDs de Calico
       kubernetes.core.k8s:
