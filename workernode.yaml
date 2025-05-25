@@ -3,6 +3,9 @@
   become: true
   vars_files:
     - secret.yaml
+  vars:
+    pod_network_cidr: "192.168.0.0/16"
+    calico_version: "v3.30.0"
 
   tasks:
 
@@ -96,7 +99,7 @@
       command: >
         kubeadm join {{ master_address }}:6443
         --token {{ kubeadm_token }}
-        --discovery-token-ca-cert-hash {{ ca_cert_hash }}
+        --discovery-token-ca-cert-hash sha256:{{ ca_cert_hash }}
       register: kubeadm_join_output
       changed_when: "'This node has joined the cluster' in kubeadm_join_output.stdout"
 
