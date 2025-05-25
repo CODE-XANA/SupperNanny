@@ -103,29 +103,6 @@
       register: kubeadm_join_output
       changed_when: "'This node has joined the cluster' in kubeadm_join_output.stdout"
 
-    - name: Créer le dossier .kube pour l'utilisateur
-      file:
-        path: /home/{{ ansible_user }}/.kube
-        state: directory
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0755'
-
-    - name: Copier le fichier admin.conf depuis le master via SCP
-      shell: >
-        scp -o StrictHostKeyChecking=no -i {{ ssh_key_path }}
-        {{ ssh_user }}@{{ master_address }}:/etc/kubernetes/admin.conf
-        /home/{{ ansible_user }}/.kube/config
-      args:
-        creates: /home/{{ ansible_user }}/.kube/config
-
-    - name: Changer les permissions sur le fichier kubeconfig
-      file:
-        path: /home/{{ ansible_user }}/.kube/config
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0600'
-
     - name: Installer le client Python de Kubernetes
       apt:
         name: python3-kubernetes
