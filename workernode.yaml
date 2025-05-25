@@ -3,97 +3,134 @@
   become: true
   vars_files:
     - secret.yaml
+
   tasks:
-    - name: Mise à jour
-      ansible.builtin.apt:
+
+    - name: Mettre à jour et upgrader le système
+      apt:
         update_cache: yes
+        upgrade: dist
 
-    - name: Upgrade
-      ansible.builtin.apt:
-        upgrade: yes
+    - name: Désactiver le swap dans le fichier fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^\s*/swap'
+        state: absent
 
-    - name: Désactiver le swapoff y compris lors du redémarrage de la machine
-      command: sed -i '/swap/ s/^/#/' /etc/fstab
-
-    - name: Installation paquets
-      ansible.builtin.apt:
+    - name: Installer containerd
+      apt:
         name: containerd
+        state: present
 
-    - name: Mise à jour
-      ansible.builtin.apt:
-        update_cache: yes
-
-    - name: Démarrer le systemctl containerd
-      ansible.builtin.service:
-        name: containerd
-        state: started
-      when: not ansible_check_mode
-
-    - name: Activer le systemctl containerd
-      ansible.builtin.service: 
-        name: containerd
-        enabled: yes
-      when: not ansible_check_mode
-
-    - name: Installer les utilitaires
-      ansible.builtin.apt:
-        name: 
-        - apt-transport-https 
-        - ca-certificates 
-        - curl
-        - gpg
-
-    - name: Créer le répertoire /etc/apt/keyrings
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
+    - name: Créer le répertoire de configuration de containerd
+      file:
+        path: /etc/containerd
         state: directory
-        mode: '0755'
 
-    - name: Télécharger et convertir la clé GPG Kubernetes
-      ansible.builtin.command: >
-        bash -c "curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+    - name: Générer la configuration par défaut de containerd
+      shell: containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Redémarrer et activer containerd
+      systemd:
+        name: containerd
+        enabled: true
+        state: restarted
+
+    - name: Installer les dépendances de Kubernetes
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+        state: present
+
+    - name: Ajouter la clé APT de Kubernetes
+      shell: |
+        mkdir -p -m 755 /etc/apt/keyrings
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | \
+        gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
       args:
         creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-    - name: Ajouter le dépôt Kubernetes dans sources.list.d
-      ansible.builtin.copy:
+    - name: Ajouter le dépôt Kubernetes
+      copy:
         dest: /etc/apt/sources.list.d/kubernetes.list
         content: |
           deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /
-        owner: root
-        group: root
-        mode: '0644'
 
-    - name: Mise à jour 
-      ansible.builtin.apt:
+    - name: Mettre à jour le cache APT pour Kubernetes
+      apt:
         update_cache: yes
 
-    - name: Installer kublet, kubeadm et kubectl
-      ansible.builtin.apt:
-        name: 
+    - name: Installer les composants de Kubernetes
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+
+    - name: Geler les paquets Kubernetes avec apt-mark hold
+      command: apt-mark hold {{ item }}
+      loop:
         - kubelet
         - kubeadm
         - kubectl
-        state: present
-      when: not ansible_check_mode
-
-    - name: Mettre en hold kublet, kubeadm et kubectl
-      command: apt-mark hold kubelet kubeadm kubectl
-      when: not ansible_check_mode
 
     - name: Activer le service kubelet
-      ansible.builtin.service:
+      systemd:
         name: kubelet
-        enabled: yes
-      when: not ansible_check_mode
+        enabled: true
+        state: started
 
-    - name: Joindre le worker au cluster Kubernetes
-      ansible.builtin.command: >
+    - name: Joindre le nœud au cluster Kubernetes
+      command: >
         kubeadm join {{ master_address }}:6443
         --token {{ kubeadm_token }}
-        --discovery-token-ca-cert-hash sha256:{{ ca_cert_hash }}
-      when: not ansible_check_mode
+        --discovery-token-ca-cert-hash {{ ca_cert_hash }}
+      register: kubeadm_join_output
+      changed_when: "'This node has joined the cluster' in kubeadm_join_output.stdout"
 
-    - name: Appliquer le manifest Calico avec kubectl
-      ansible.builtin.command: >
-        kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+    - name: Installer le client Python de Kubernetes
+      apt:
+        name: python3-kubernetes
+        state: present
+
+    - name: Déployer les CRDs de Calico
+      kubernetes.core.k8s:
+        state: present
+        src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
+
+    - name: Déployer l'opérateur Calico
+      kubernetes.core.k8s:
+        state: present
+        src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
+
+    - name: Télécharger les ressources personnalisées de Calico
+      get_url:
+        url: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml
+        dest: /tmp/custom-resources.yaml
+
+    - name: Appliquer les ressources personnalisées de Calico
+      kubernetes.core.k8s:
+        state: present
+        src: /tmp/custom-resources.yaml
+
+    - name: Attendre que le nœud Kubernetes soit en état Ready
+      shell: kubectl get nodes --no-headers | grep -q ' Ready '
+      register: node_ready_check
+      retries: 20
+      delay: 10
+      until: node_ready_check.rc == 0
+      changed_when: false
+
+    - name: Afficher l'état des nœuds Kubernetes
+      shell: kubectl get nodes
+      register: kube_nodes_output
+      changed_when: false
+
+    - name: Afficher la sortie de la commande kubectl get nodes
+      debug:
+        msg: "{{ kube_nodes_output.stdout_lines }}"
