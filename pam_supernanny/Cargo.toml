@@ -1,0 +1,18 @@
+[package]
+name = "pam_supernanny"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pam-sys = "0.5.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12.15", features = ["blocking", "json", "rustls-tls"] }
+zeroize = "1.6"
+anyhow = "1.0"
+libc = "0.2.172"
+syslog = "7.0"
+
