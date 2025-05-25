@@ -87,10 +87,10 @@
 
     - name: Activer l'IP forwarding
       sysctl:
-      name: net.ipv4.ip_forward
-      value: '1'
-      state: present
-      reload: yes
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        reload: yes
 
     - name: Joindre le nœud au cluster Kubernetes
       command: >
