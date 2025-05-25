@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use dialoguer::{Input, Select};
+use dialoguer::Select;
 use landlock::{
     Access, AccessFs, AccessNet, NetPort, PathBeneath, PathFd, Ruleset, RulesetAttr,
     RulesetCreatedAttr, ABI,
@@ -14,9 +14,9 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use supernanny_sandboxer::policy_client::RuleSet;
-use supernanny_sandboxer::policy_client::{log_denial_event, User};
+use supernanny_sandboxer::policy_client::log_denial_event; // Removed unused `User`
 use tempfile::TempDir;
-use zeroize::Zeroize;
+// Removed unused `use zeroize::Zeroize;`
 
 // ----------------------------------------------------------------------------
 // Constants for limiting policy expansion
@@ -168,62 +168,14 @@ impl AppPolicy {
 }
 
 // ----------------------------------------------------------------------------
-// Auth: Enhanced with zeroize for secure password handling
-// ----------------------------------------------------------------------------
-
-#[derive(Debug)]
-struct Credentials {
-    username: String,
-    token: String,
-    _user: User,
-}
-
-impl Credentials {
-    fn new(username: String, token: String, user: User) -> Self {
-        Self {
-            username,
-            token,
-            _user: user,
-        }
-    }
-}
-
-fn get_credentials() -> Result<Credentials> {
-    let username = Input::<String>::new()
-        .with_prompt("Username")
-        .interact_text()
-        .context("Failed to read username")?;
-
-    let mut password = dialoguer::Password::new()
-        .with_prompt("Password")
-        .interact()
-        .context("Failed to read password")?;
-
-    // Get the result before clearing password
-    let (token, user) = match RuleSet::login(&username, &password) {
-        Ok((tok, usr)) => (tok, usr),
-        Err(e) => {
-            // Ensure password is cleared even on error
-            password.zeroize();
-            return Err(anyhow!("Authentication failed: {}", e));
-        }
-    };
-
-    // Clear password from memory
-    password.zeroize();
-
-    Ok(Credentials::new(username, token, user))
-}
-
-// ----------------------------------------------------------------------------
 // Server communication
 // ----------------------------------------------------------------------------
 
 fn verify_user_permissions(token: &str) -> Result<HashSet<String>> {
     let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "https://127.0.0.1:8443".into());
-    
+
     let client = Client::builder()
-        .danger_accept_invalid_certs(true) 
+        .danger_accept_invalid_certs(true)
         .build()
         .context("Failed to build HTTPS client")?;
 
@@ -256,21 +208,21 @@ fn update_policy_on_server(
         return Err(anyhow!("User does not have policy management permissions"));
     }
 
-    let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "https://127.0.0.1:8443".into()); 
-    
+    let base_url = env::var("SERVER_URL").unwrap_or_else(|_| "https://127.0.0.1:8443".into());
+
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("Failed to build HTTPS client")?;
-    
+
     // Create vectors from paths
     let ro_paths_vec: Vec<String> = policy
         .ro_paths
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    
+
     let rw_paths_vec: Vec<String> = policy
         .rw_paths
         .iter()
@@ -279,21 +231,21 @@ fn update_policy_on_server(
 
     // First attempt to check if there's an existing pending request
     let check_url = format!("{}/policy/pending-requests", base_url);
-    
+
     let res = client
         .get(&check_url)
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .context("Failed to check for pending policy requests")?;
-    
+
     let status = res.status();
-    
+
     // If we can successfully retrieve pending requests
     let mut existing_request_id = None;
     if status.is_success() {
         let pending_requests: serde_json::Value = res.json()
             .context("Failed to parse pending requests response")?;
-        
+
         // Check if there's already a pending request for this app and role
         if let Some(requests) = pending_requests.as_array() {
             for request in requests {
@@ -347,29 +299,29 @@ fn update_policy_on_server(
             .send()
             .context("Failed to send policy update request")?
     };
-    
+
     let status = res.status();
-    
+
     if !status.is_success() {
         let error_text = res.text().unwrap_or_else(|_| "Unknown error".to_string());
-        
+
         // Special handling for duplicate key constraint errors
         if error_text.contains("idx_unique_pending_requests") &&
            error_text.contains("existe déjà") {
             // Fall back to trying to delete the old request and create a new one
             println!("Detected duplicate request, attempting to delete existing request and create a new one...");
-            
+
             // Try to find and delete any existing requests
             let delete_url = format!("{}/policy/delete-pending/{}/{}", base_url, app, 1);
             let delete_res = client
                 .delete(&delete_url)
                 .header("Authorization", format!("Bearer {}", token))
                 .send();
-                
+
             if let Ok(delete_res) = delete_res {
                 if delete_res.status().is_success() {
                     println!("Successfully deleted existing pending request.");
-                    
+
                     // Now try to create the request again
                     let create_url = format!("{}/policy/request", base_url);
                     let retry_res = client
@@ -378,7 +330,7 @@ fn update_policy_on_server(
                         .header("Content-Type", "application/json")
                         .json(&payload)
                         .send();
-                        
+
                     if let Ok(retry_res) = retry_res {
                         if retry_res.status().is_success() {
                             println!("Policy update request successfully submitted!");
@@ -389,7 +341,7 @@ fn update_policy_on_server(
                 }
             }
         }
-        
+
         return Err(anyhow!(
             "Policy update request failed: {} - {}",
             status,
@@ -431,10 +383,10 @@ fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
             Ok(canonical_path) => {
                 if let Ok(fd) = PathFd::new(canonical_path.as_os_str()) {
                     let rule = PathBeneath::new(fd, AccessFs::from_read(abi));
-                    
+
                     // Important: Store the result in a temporary variable first
                     let result = created.add_rule(rule);
-                    
+
                     // Then handle the result without using created again until reassigned
                     match result {
                         Ok(new_created) => created = new_created,
@@ -475,10 +427,10 @@ fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
         if let Ok(canonical_path) = fs::canonicalize(path) {
             if let Ok(fd) = PathFd::new(canonical_path.as_os_str()) {
                 let rule = PathBeneath::new(fd, AccessFs::from_all(abi));
-                
+
                 // Store result first
                 let result = created.add_rule(rule);
-                
+
                 // Handle result safely
                 match result {
                     Ok(new_created) => created = new_created,
@@ -508,10 +460,10 @@ fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
     // TCP bind ports
     for port in &policy.tcp_bind {
         let rule = NetPort::new(*port, AccessNet::BindTcp);
-        
+
         // Store result first
         let result = created.add_rule(rule);
-        
+
         // Handle result safely
         match result {
             Ok(new_created) => created = new_created,
@@ -528,10 +480,10 @@ fn enforce_landlock(policy: &AppPolicy) -> Result<()> {
     // TCP connect ports
     for port in &policy.tcp_connect {
         let rule = NetPort::new(*port, AccessNet::ConnectTcp);
-        
+
         // Store result first
         let result = created.add_rule(rule);
-        
+
         // Handle result safely
         match result {
             Ok(new_created) => created = new_created,
@@ -922,16 +874,22 @@ fn main() -> Result<()> {
         return Err(anyhow!("Invalid application path: {}", e));
     }
 
-    // Authenticate user
-    let credentials = get_credentials().context("Failed to authenticate user")?;
-    println!("Authentication successful! User: {}", credentials.username);
+    // Read token from file
+    let token_file_path = "/run/user/1000/supernanny/session.cache";
+    let token_content = fs::read_to_string(token_file_path)
+        .context("Failed to read token file")?;
+    let token_data: serde_json::Value = serde_json::from_str(&token_content)
+        .context("Failed to parse token file")?;
+    let token = token_data["token"].as_str()
+        .ok_or_else(|| anyhow!("Token not found in file"))?
+        .to_string();
 
     // Verify user permissions
     let permissions =
-        verify_user_permissions(&credentials.token).context("Failed to verify user permissions")?;
+        verify_user_permissions(&token).context("Failed to verify user permissions")?;
 
     // Retrieve policy from server
-    let ruleset = RuleSet::fetch_for_app(app, &credentials.token)
+    let ruleset = RuleSet::fetch_for_app(app, &token)
         .context("Failed to fetch policy from server")?;
     let mut policy = AppPolicy::from(ruleset);
     let original_policy = policy.clone();
@@ -959,17 +917,17 @@ fn main() -> Result<()> {
                 "filesystem"
             };
 
-            if let Err(e) = log_denial_event(app, denial, resource_type, &credentials.token) {
+            if let Err(e) = log_denial_event(app, denial, resource_type, &token) {
                 eprintln!("Warning: Failed to log denial event: {}", e);
             }
         }
-        
+
         // Process denials and update policy if user has permission
         let updated = process_denials(denials.clone(), &mut policy, &permissions)?;
 
         // Update policy on server if changes were made
         if updated {
-            match update_policy_on_server(app, &policy, &credentials.token, &permissions) {
+            match update_policy_on_server(app, &policy, &token, &permissions) {
                 Ok(_) => {
                     println!("Your policy update request has been submitted and is pending approval.");
                     println!("Until approved, the current policy remains in effect.");
