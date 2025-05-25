@@ -7,6 +7,13 @@
     pod_network_cidr: "192.168.0.0/16"
     calico_version: "v3.30.0"
 
+  pre_tasks:
+    - name: Détecter l'utilisateur et définir le chemin HOME
+      become: false
+      set_fact:
+        user_home: "/home/{{ ansible_facts['user_id'] }}"
+      when: ansible_facts['user_id'] != 'root'
+
   tasks:
 
     - name: Mettre à jour et upgrader le système
@@ -108,15 +115,9 @@
         name: python3-kubernetes
         state: present
 
-    - name: Set user_home using ansible_facts
-      become: false
-      set_fact:
-        user_home: "/home/{{ ansible_facts['user_id'] }}"
-      when: ansible_facts['user_id'] != 'root'
-
     - name: Déployer les CRDs de Calico
       kubernetes.core.k8s:
-        kubeconfig: "{{ ansible_user }}/.kube/config"
+        kubeconfig: "{{ user_home }}/.kube/config"
         state: present
         src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
 
