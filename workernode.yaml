@@ -110,6 +110,7 @@
 
     - name: Déployer les CRDs de Calico
       kubernetes.core.k8s:
+        kubeconfig: "{{ ansible_env.HOME }}/.kube/config"
         state: present
         src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
 
