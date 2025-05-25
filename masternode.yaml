@@ -130,7 +130,7 @@
       src: /etc/kubernetes/admin.conf
       dest: ./admin_conf/
       flat: yes
-    delegate_to: master_host
+    delegate_to: masternode
 
   - name: Installer le client Python de Kubernetes
     apt:
