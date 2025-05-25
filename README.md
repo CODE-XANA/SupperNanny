@@ -66,7 +66,7 @@ Commencez par crée le fichier .kube dans le répertoire courant de l'utilisateu
 
 Il vous sera nécessaire de copier le fichier admin.conf du master node vers votre workernode dans le dossier crée précedemment. Pour ce faire, utiliser la commande suivante : 
 
-```scp utilisateur@adresse_ip:/chemin/vers/fichier /chemin/de/destination/local```
+```scp utilisateur@adresse_ip:~/.kube/admin.conf ~/.kube/admin.conf```
 
 Si vous avez bien suivi les étapes précédentes, il ne vous reste plus qu'à lancer le playbook _workernode.yaml_ en utilisant la commande suivante : 
 

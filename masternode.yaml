@@ -12,6 +12,17 @@
       update_cache: yes
       upgrade: dist
 
+  - name: Installer OpenSSH Server
+    apt:
+      name: openssh-server
+      state: present
+
+  - name: S'assurer que le service SSH est démarré et activé
+    systemd:
+      name: ssh
+      state: started
+      enabled: true
+
   - name: Désactiver le swap dans le fichier fstab
     lineinfile:
       path: /etc/fstab
