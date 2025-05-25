@@ -8,11 +8,11 @@
     calico_version: "v3.30.0"
 
   pre_tasks:
-    - name: Détecter l'utilisateur et définir le chemin HOME
+    - name: Détecter le chemin HOME de l'utilisateur actif
       become: false
       set_fact:
-        user_home: "/home/{{ ansible_facts['user_id'] }}"
-      when: ansible_facts['user_id'] != 'root'
+        user_home: "{{ ansible_env.HOME }}"
+
 
   tasks:
 
