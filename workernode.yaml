@@ -103,14 +103,22 @@
       register: kubeadm_join_output
       changed_when: "'This node has joined the cluster' in kubeadm_join_output.stdout"
 
-    - name: Configurer le fichier kubeconfig pour l'utilisateur
-      shell: |
-        mkdir -p $HOME/.kube
-        cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-        chown $(id -u):$(id -g) $HOME/.kube/config
-      args:
-        executable: /bin/bash
-    
+    - name: Créer le répertoire .kube
+      file:
+        path: /home/{{ ansible_user }}/.kube
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Copier admin.conf sur la machine cible
+      copy:
+        src: ./admin_conf/admin.conf
+        dest: /home/{{ ansible_user }}/.kube/config
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+
     - name: Installer le client Python de Kubernetes
       apt:
         name: python3-kubernetes

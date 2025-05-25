@@ -125,6 +125,13 @@
     args:
       executable: /bin/bash
 
+  - name: Récupérer le fichier admin.conf depuis le master
+    fetch:
+      src: /etc/kubernetes/admin.conf
+      dest: ./admin_conf/
+      flat: yes
+    delegate_to: master_host
+
   - name: Installer le client Python de Kubernetes
     apt:
       name: python3-kubernetes
