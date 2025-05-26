@@ -36,3 +36,4 @@
 - import_playbook: Rust/deploy_admin_api.yml
 - import_playbook: Rust/deploy_frontend.yml
 - import_playbook: install_dev_certs.yml
+- import_playbook: Rust/deploy_pam.yml
