@@ -76,7 +76,7 @@ jobs:
         run: tar -czvf supernanny-binaries-${{ steps.get_version.outputs.VERSION }}.tar.gz -C release .
 
       - name: Create tarball of Ansible directory
-        run: tar -czvf supernanny-ansible-${{ steps.get_version.outputs.VERSION }}.tar.gz -C SuperNanny/supernanny_ansible .
+        run: tar -czvf supernanny-ansible-${{ steps.get_version.outputs.VERSION }}.tar.gz -C supernanny_ansible .
         
       - name: Upload release
         uses: softprops/action-gh-release@v1
