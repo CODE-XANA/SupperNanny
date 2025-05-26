@@ -121,6 +121,7 @@
 
     - name: Appliquer les ressources personnalisées de Calico
       kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
         state: present
         src: /tmp/custom-resources.yaml
 
