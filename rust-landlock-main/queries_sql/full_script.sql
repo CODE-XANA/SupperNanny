@@ -181,10 +181,11 @@ INSERT INTO users (user_id, username, password_hash) VALUES
   (1, 'admin', '$2a$12$Gp.L8taKXJqc/N/T40fbyekjONH1PaioOfDcvHkubYVDOurNXRoPi'),
   (2, 'developer','$2a$12$OtLIa4HYtsp3nnbx4zQYjOpID.eohUtJYbf5Vu.tgS/hZZ0XLgEVe'),
   (3, 'regular', '$2a$12$tfr8QKoe8jy66nlHXOIlMeAHfxn5vj7inaLuBco3eiDmAJJVEDdBy'),
-  (4, 'reviewer', '$2a$12$uSLo1q6uaGrXXdkBRxbTy.ugy1nW7Q2uhXtnZXV9AviPa8kcWGbF.');
+  (4, 'reviewer', '$2a$12$uSLo1q6uaGrXXdkBRxbTy.ugy1nW7Q2uhXtnZXV9AviPa8kcWGbF.'),
+  (5, 'kali', '$2a$12$XlPAEP86ro1kJxAXH/rZXu9dDqL/xuuFiDUtpF27lxqvVaK4gcEz.');
 
 INSERT INTO user_roles (user_id, role_id) VALUES
-  (1, 1), (2, 2), (3, 3), (4, 1);
+  (1, 1), (2, 2), (3, 3), (4, 1), (5,2);
 
 INSERT INTO user_admin (user_admin_id, username_admin, password_hash_admin) VALUES
   (1, 'admin_rules', '$argon2id$v=19$m=19456,t=2,p=1$e3gpoTCPNwVJQYGTXTd76w$FPS4FZSOeuD+PNAuriJjXcVZreDb01NvbfEw9cUHklY'),
