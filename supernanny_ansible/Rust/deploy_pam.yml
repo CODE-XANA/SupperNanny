@@ -1,0 +1,102 @@
+---
+- name: Deploy Rust PAM module
+  hosts: supernanny
+  gather_facts: yes
+  become: false
+
+  vars:
+    user_home: "{{ ansible_user_dir }}"
+    project_root: "{{ user_home }}/SupperNanny"
+    pam_dir: "{{ project_root }}/pam_supernanny"
+    pam_module: "libpam_supernanny.so"
+    pam_service: "supernanny-debug"
+
+  vars_prompt:
+    - name: "become_password"
+      prompt: "Enter become password"
+      private: yes
+
+  tasks:
+    - name: Ensure project directory exists
+      file:
+        path: "{{ project_root }}"
+        state: directory
+        mode: '0755'
+
+    - name: Ensure PAM directory exists
+      file:
+        path: "{{ pam_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Install required dependencies
+      become: true
+      apt:
+        name: libpam0g-dev
+        state: present
+
+    - name: Install Rust and Cargo
+      shell: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      args:
+        executable: /bin/bash
+
+    - name: "Step 1/4: Starting PAM module compilation"
+      debug:
+        msg: "Building PAM module in {{ pam_dir }} with cargo release mode..."
+
+    - name: "Step 2/4: Compile PAM module in release mode"
+      shell: |
+        /home/kali/.cargo/bin/cargo build --release
+      args:
+        chdir: "{{ pam_dir }}"
+        executable: /bin/bash
+
+    - name: "Step 3/4: Copy PAM module to security directory"
+      become: true
+      copy:
+        src: "{{ pam_dir }}/target/release/{{ pam_module }}"
+        dest: "/usr/lib/security/{{ pam_module }}"
+        mode: '0755'
+        remote_src: yes
+
+    - name: "Step 4/4: Configure PAM service"
+      become: true
+      copy:
+        dest: "/etc/pam.d/{{ pam_service }}"
+        content: |
+          auth required pam_unix.so
+          auth required pam_supernanny.so
+        mode: '0644'
+
+    - name: "Test PAM module with dual authentication"
+      shell: |
+        printf "%s\n" "{{ become_password }}" | pamtester {{ pam_service }} kali authenticate
+      register: pam_test_result
+      ignore_errors: yes
+      no_log: true  # Ensures password is not logged
+
+    - name: "Display PAM test result"
+      debug:
+        var: pam_test_result
+      when: pam_test_result is defined
+
+    - name: "Check PAM module file"
+      stat:
+        path: "/usr/lib/security/{{ pam_module }}"
+      register: pam_module_file
+
+    - name: "Display PAM module file info"
+      debug:
+        var: pam_module_file
+      when: pam_module_file is defined
+
+    - name: "Check PAM configuration file"
+      stat:
+        path: "/etc/pam.d/{{ pam_service }}"
+      register: pam_config_file
+
+    - name: "Display PAM configuration file info"
+      debug:
+        var: pam_config_file
+      when: pam_config_file is defined
