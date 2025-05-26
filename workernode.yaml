@@ -126,6 +126,7 @@
         src: /tmp/custom-resources.yaml
 
     - name: Attendre que le nœud Kubernetes soit en état Ready
+      become: false
       shell: kubectl get nodes --no-headers | grep -q ' Ready '
       register: node_ready_check
       retries: 20
@@ -134,6 +135,7 @@
       changed_when: false
 
     - name: Afficher l'état des nœuds Kubernetes
+      become: false
       shell: kubectl get nodes
       register: kube_nodes_output
       changed_when: false
