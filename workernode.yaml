@@ -114,10 +114,12 @@
         state: present
         src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
 
-    - name: Déployer l'opérateur Calico
+    - name: Déployer les CRDs de Calico
       kubernetes.core.k8s:
+        kubeconfig: "/root/.kube/config"
+        remote_src: true
         state: present
-        src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
+        src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
 
     - name: Télécharger les ressources personnalisées de Calico
       get_url:
