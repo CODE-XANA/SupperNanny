@@ -68,6 +68,12 @@ Il vous sera nécessaire de copier le fichier admin.conf du master node vers vot
 
 ```scp utilisateur@adresse_ip:/etc/kubernetes/admin.conf ~/.kube/config```
 
+Maintenant, il faut déplacer ce même répertoire dans le répertoire root de votre machine. 
+
+- Passez root : ```su -```
+- Déplacez le dossier : ```mv /home/<nom_de_votre_utilisateur>/.kube /root/```
+- Changez le propriétaire à root : ```chown -R root:root /root/.kube```
+
 Si vous avez bien suivi les étapes précédentes, il ne vous reste plus qu'à lancer le playbook _workernode.yaml_ en utilisant la commande suivante : 
 
 ```ansible-playbook workernode.yaml --ask-become-pass --ask-vault-pass```
