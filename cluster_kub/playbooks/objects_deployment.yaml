@@ -5,6 +5,7 @@
 
     - name: Créer le secret Kubernetes postgres-secret avec le mot de passe
       kubernetes.core.k8s:
+        namespace: default
         kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
         state: present
         definition:

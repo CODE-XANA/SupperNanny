@@ -1,0 +1,62 @@
+---
+- name: Cleanup Kubernetes worker node and cluster resources
+  hosts: localhost
+  gather_facts: no
+  vars:
+    worker_node_name: "workernode1"
+    kube_namespace_list:
+      - default
+  tasks:
+
+    - name: Delete pods on the worker node
+      shell: kubectl delete pods --all --all-namespaces --field-selector spec.nodeName={{ worker_node_name }}
+      ignore_errors: yes
+
+    - name: Delete deployments in namespaces
+      shell: |
+        for ns in {{ kube_namespace_list | join(' ') }}; do
+          kubectl delete deployment --all -n $ns || true
+          kubectl delete statefulset --all -n $ns || true
+          kubectl delete daemonset --all -n $ns || true
+        done
+      ignore_errors: yes
+
+    - name: Delete PVCs in namespaces
+      shell: |
+        for ns in {{ kube_namespace_list | join(' ') }}; do
+          kubectl delete pvc --all -n $ns || true
+        done
+      ignore_errors: yes
+
+    - name: Delete all PVs
+      shell: kubectl delete pv --all || true
+      ignore_errors: yes
+
+    - name: Delete the worker node from cluster
+      shell: kubectl delete node {{ worker_node_name }} || true
+      ignore_errors: yes
+
+
+- name: Reset Kubernetes worker node
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: kubeadm reset on worker node
+      shell: kubeadm reset -f
+
+    - name: Remove CNI and kubelet directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/cni/net.d
+        - /var/lib/cni/
+        - /var/lib/kubelet/
+        - /var/lib/kube-proxy/
+        - /var/run/kubernetes/
+
+    - name: Restart containerd service
+      systemd:
+        name: containerd
+        state: restarted

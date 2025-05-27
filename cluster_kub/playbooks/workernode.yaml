@@ -125,21 +125,23 @@
         state: present
         src: /tmp/custom-resources.yaml
 
-    - name: Attendre que le nœud Kubernetes soit en état Ready
+    - name: Attendre que le nœud worker Kubernetes soit en état Ready
       become: false
-      shell: kubectl get nodes --no-headers | grep -q ' Ready '
+      vars:
+        worker_node_name: "workernode1" 
+      shell: kubectl get node {{ worker_node_name }} --no-headers | grep -q ' Ready '
       register: node_ready_check
       retries: 20
       delay: 10
       until: node_ready_check.rc == 0
       changed_when: false
 
-    - name: Afficher l'état des nœuds Kubernetes
+    - name: Afficher l'état du nœud worker Kubernetes
       become: false
-      shell: kubectl get nodes
-      register: kube_nodes_output
+      shell: kubectl get node {{ worker_node_name }}
+      register: kube_node_output
       changed_when: false
 
-    - name: Afficher la sortie de la commande kubectl get nodes
+    - name: Afficher la sortie de la commande kubectl get node
       debug:
-        msg: "{{ kube_nodes_output.stdout_lines }}"
+        msg: "{{ kube_node_output.stdout_lines }}"
