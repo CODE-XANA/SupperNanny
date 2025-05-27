@@ -13,33 +13,39 @@
         kubeconfig: ~/.kube/config
         state: present
         definition: "{{ lookup('file', '../objects/postgres.yaml') }}"
+        namespace: default
 
     - name: Appliquer Deployment et Service microservice BDD
       k8s:
         kubeconfig: ~/.kube/config
         state: present
         definition: "{{ lookup('file', '../objects/microservice_bdd.yaml') }}"
+        namespace: default
 
     - name: Appliquer Deployment et Service sandbox application
       k8s:
         kubeconfig: ~/.kube/config
         state: present
         definition: "{{ lookup('file', '../objects/sandbox.yaml') }}"
+        namespace: default
 
     - name: Appliquer Deployment et grafana pvc
       k8s:
         kubeconfig: ~/.kube/config
         state: present
         definition: "{{ lookup('file', '../objects/grafana-pvc.yaml') }}"
+        namespace: default
 
-    - name: Appliquer Deployment et grafana pvc
+    - name: Appliquer Deployment et api
       k8s:
         kubeconfig: ~/.kube/config
         state: present
         definition: "{{ lookup('file', '../objects/api.yaml') }}"
+        namespace: default
 
     - name: Appliquer Deployment et grafana
       k8s:
         kubeconfig: ~/.kube/config
         state: present
         definition: "{{ lookup('file', '../objects/grafana.yaml') }}"
+        namespace: default
