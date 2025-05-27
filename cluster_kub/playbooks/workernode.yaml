@@ -6,6 +6,7 @@
   vars:
     pod_network_cidr: "192.168.0.0/16"
     calico_version: "v3.30.0"
+    worker_node_name: "workernode1" 
 
   tasks:
 
@@ -127,8 +128,6 @@
 
     - name: Attendre que le nœud worker Kubernetes soit en état Ready
       become: false
-      vars:
-        worker_node_name: "workernode1" 
       shell: kubectl get node {{ worker_node_name }} --no-headers | grep -q ' Ready '
       register: node_ready_check
       retries: 20
