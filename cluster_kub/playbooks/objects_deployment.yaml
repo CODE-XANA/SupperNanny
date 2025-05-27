@@ -30,6 +30,14 @@
         definition: "{{ lookup('file', '../objects/postgres.yaml') }}"
         namespace: default
 
+    - name: Vérifier que la BDD soit en état Ready
+      shell: kubectl wait --for=condition=running pod/postgres-0 --timeout=180s --namespace=default
+      register: wait_postgres
+      retries: 5
+      delay: 10
+      until: wait_postgres.rc == 0
+      changed_when: false
+
     - name: Appliquer Deployment et Service microservice BDD
       k8s:
         kubeconfig: ~/.kube/config
