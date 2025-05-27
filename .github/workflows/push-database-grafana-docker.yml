@@ -259,9 +259,6 @@ jobs:
           # PostgreSQL uses port 5432
           EXPOSE 5432
           
-          # Add health check
-          HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-            CMD pg_isready -U sandboxuser -d sandboxdb || exit 1
           EOF
       
       # Create Grafana Dockerfile
