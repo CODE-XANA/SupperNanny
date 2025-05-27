@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev clang build-essen
 RUN cargo build --release --verbose
 
 # Stage 2: Minimal runtime image
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 COPY --from=builder /app/target/release/supernanny_service /usr/local/bin/supernanny_axiom
 
