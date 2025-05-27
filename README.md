@@ -70,7 +70,7 @@ Il vous sera nécessaire de copier le fichier admin.conf du master node vers vot
 
 Si vous avez bien suivi les étapes précédentes, il ne vous reste plus qu'à lancer le playbook _workernode.yaml_ en utilisant la commande suivante : 
 
-```ansible-playbook workernode.yaml --ask-become-pass --ask-vault-pass```
+```ansible-playbook worker.yaml --ask-become-pass --ask-vault-pass```
 
 Saisissez votre mot de passe utilisateur pour devenir root, puis celui que vous avez utilisé pour Ansible Vault. Enfin, laissez l'exécution aller au bout. 
 
