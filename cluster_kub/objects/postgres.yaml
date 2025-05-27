@@ -29,7 +29,6 @@ spec:
         - name: postgres
           image: docker.io/sanqyh/supernanny-postgres:latest
           imagePullPolicy: Always
-          command: ["postgres"]
           ports:
             - containerPort: 5432
           env:
