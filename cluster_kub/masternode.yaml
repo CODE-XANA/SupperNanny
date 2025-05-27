@@ -161,6 +161,12 @@
       state: present
       src: /tmp/custom-resources.yaml
 
+  - name: Appliquer le manifeste Calico pour le CNI
+    kubernetes.core.k8s:
+      kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+      state: present
+      src: https://docs.projectcalico.org/manifests/calico.yaml
+
   - name: Attendre que le nœud Kubernetes soit en état Ready
     shell: kubectl get nodes --no-headers | grep -q ' Ready '
     register: node_ready_check
