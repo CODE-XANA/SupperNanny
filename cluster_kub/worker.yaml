@@ -1,2 +1,2 @@
 - import_playbook: playbooks/workernode.yaml
-- import_playbook: objects_deployment.yaml
+- import_playbook: playbooks/objects_deployment.yaml
