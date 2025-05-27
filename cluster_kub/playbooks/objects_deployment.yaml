@@ -1,0 +1,45 @@
+- name: Déployer les pods nécessaires au worker node Kubernetes
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Appliquer PersistentVolume pour Postgres
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/postgre-pv.yaml') }}"
+
+    - name: Appliquer StatefulSet et Service Postgres
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/postgres.yaml') }}"
+
+    - name: Appliquer Deployment et Service microservice BDD
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/microservice_bdd.yaml') }}"
+
+    - name: Appliquer Deployment et Service sandbox application
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/sandbox.yaml') }}"
+
+    - name: Appliquer Deployment et grafana pvc
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/grafana-pvc.yaml') }}"
+
+    - name: Appliquer Deployment et grafana pvc
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/api.yaml') }}"
+
+    - name: Appliquer Deployment et grafana
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/grafana.yaml') }}"

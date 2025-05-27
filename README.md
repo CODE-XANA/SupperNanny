@@ -60,7 +60,7 @@ Une fois le mot de passe entré, saisissez ces lignes :
 
 #### Worker Node ####
 
-Commencez par crée le fichier .kube dans le répertoire courant de l'utilisateur : 
+Commencez par crée le répertoire .kube dans le répertoire courant de l'utilisateur : 
 
 ```mkdir .kube```
 

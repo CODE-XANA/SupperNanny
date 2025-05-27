@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-deployment
+  labels:
+    app: api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: api
+        image: sanqyh/supernanny-admin-api:latest
+        imagePullPolicy: Always          
+        ports:
+        - containerPort: 9443
+        env:
+          - name: DB_HOST
+            value: "127.0.0.1"
+          - name: DB_PORT
+            value: "5432"
+          - name: DB_USER
+            value: "sandboxuser"
+          - name: DB_PASS
+            value: "supernanny"
+          - name: DB_NAME
+            value: "sandboxdb"
+          - name: JWT_SECRET
+            value: "4281bb530b7e8fd6b2d94b87017f5e565dfff08482f86f6f4d13ef2695e3b0342f93e15945d6c3071d0de9b2aa982d25f516d0013eef111bfad70ec5c58e7bd4"
+          - name: JWT_TTL_MIN
+            value: "60"
+          - name: HTTPS_PORT
+            value: "9443"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        resources:
+          limits:
+            cpu: "1"
+            memory: "4Gi"
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-service
+spec:
+  selector:
+    app: api
+  ports:
+  - protocol: TCP
+    port: 9443
+    targetPort: 9443
+  type: ClusterIP

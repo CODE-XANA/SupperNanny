@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-application
+  labels:
+    app: sandbox-application
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sandbox-application
+  template:
+    metadata:
+      labels:
+        app: sandbox-application
+    spec:
+      containers:
+        - name: sandbox-app
+          image: sanqyh/supernanny-sandboxer:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8443
+          env:
+            - name: SERVER_URL
+              value: "http://microservice-service:80"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-application-service
+spec:
+  selector:
+    app: sandbox-application
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
