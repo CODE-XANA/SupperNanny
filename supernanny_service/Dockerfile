@@ -20,5 +20,4 @@ WORKDIR /usr/local/bin
 # Optional: copy .env here if static
 # COPY .env /usr/local/bin/.env
 
-ENTRYPOINT ["/bin/bash"]
-#ENTRYPOINT ["./supernanny_axiom"]
+ENTRYPOINT ["./supernanny_axiom"]
