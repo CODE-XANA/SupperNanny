@@ -2,6 +2,20 @@
   hosts: localhost
   gather_facts: false
   tasks:
+
+    - name: Créer le secret Kubernetes postgres-secret avec le mot de passe
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postgres-secret
+          type: Opaque
+          stringData:
+            POSTGRES_PASSWORD: supernanny
+
     - name: Appliquer PersistentVolume pour Postgres
       k8s:
         kubeconfig: ~/.kube/config
