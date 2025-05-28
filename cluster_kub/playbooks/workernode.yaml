@@ -126,11 +126,9 @@
     #     state: present
     #     src: /tmp/custom-resources.yaml
 
-    - name: Appliquer le manifeste Calico pour le CNI
-      kubernetes.core.k8s:
-        kubeconfig: "{{ ansible_env.HOME }}/.kube/config"
-        state: present
-        src: https://docs.projectcalico.org/manifests/calico.yaml
+    - name: Appliquer le manifeste Calico via kubectl
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
 
     - name: Attendre que le nœud worker Kubernetes soit en état Ready
       become: false
