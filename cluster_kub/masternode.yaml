@@ -163,9 +163,9 @@
 
   - name: Appliquer le manifeste Calico pour le CNI
     kubernetes.core.k8s:
-      kubeconfig: "${{ ansible_env.HOME }}/.kube/config"
+      kubeconfig: "/root/.kube/config"
       state: present
-      src: https://docs.projectcalico.org/manifests/calico.yaml
+      definition: "{{ lookup('file', 'calico.yaml') }}"
 
   - name: Attendre que le nœud Kubernetes soit en état Ready
     shell: kubectl get nodes --no-headers | grep -q ' Ready '
