@@ -163,7 +163,7 @@
 
   - name: Appliquer le manifeste Calico pour le CNI
     kubernetes.core.k8s:
-      kubeconfig: "$HOME/.kube/config"
+      kubeconfig: "${{ ansible_env.HOME }}/.kube/config"
       state: present
       src: https://docs.projectcalico.org/manifests/calico.yaml
 
