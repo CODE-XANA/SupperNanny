@@ -165,7 +165,7 @@
     kubernetes.core.k8s:
       kubeconfig: "/root/.kube/config"
       state: present
-      definition: "{{ lookup('file', 'calico.yaml') }}"
+      src: https://docs.projectcalico.org/manifests/calico.yaml
 
   - name: Attendre que le nœud Kubernetes soit en état Ready
     shell: kubectl get nodes --no-headers | grep -q ' Ready '
