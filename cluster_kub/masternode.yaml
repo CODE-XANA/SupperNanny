@@ -120,7 +120,7 @@
       state: started
 
   - name: Initialiser le cluster Kubernetes
-    command: kubeadm init --pod-network-cidr={{ pod_network_cidr }}
+    command: kubeadm init --apiserver-advertise-address=192.168.56.10 --pod-network-cidr={{ pod_network_cidr }}
     register: kubeadm_output
     changed_when: "'already initialized' not in kubeadm_output.stdout"
 
@@ -141,29 +141,29 @@
       name: python3-kubernetes
       state: present
 
-  - name: Déployer les CRDs de Calico
-    kubernetes.core.k8s:
-      state: present
-      src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
+  # - name: Déployer les CRDs de Calico
+  #   kubernetes.core.k8s:
+  #     state: present
+  #     src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
 
-  - name: Déployer l'opérateur Calico
-    kubernetes.core.k8s:
-      state: present
-      src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
+  # - name: Déployer l'opérateur Calico
+  #   kubernetes.core.k8s:
+  #     state: present
+  #     src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
 
-  - name: Télécharger les ressources personnalisées de Calico
-    get_url:
-      url: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml
-      dest: /tmp/custom-resources.yaml
+  # - name: Télécharger les ressources personnalisées de Calico
+  #   get_url:
+  #     url: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml
+  #     dest: /tmp/custom-resources.yaml
 
-  - name: Appliquer les ressources personnalisées de Calico
-    kubernetes.core.k8s:
-      state: present
-      src: /tmp/custom-resources.yaml
+  # - name: Appliquer les ressources personnalisées de Calico
+  #   kubernetes.core.k8s:
+  #     state: present
+  #     src: /tmp/custom-resources.yaml
 
   - name: Appliquer le manifeste Calico pour le CNI
     kubernetes.core.k8s:
-      kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+      kubeconfig: "$HOME/.kube/config"
       state: present
       src: https://docs.projectcalico.org/manifests/calico.yaml
 
