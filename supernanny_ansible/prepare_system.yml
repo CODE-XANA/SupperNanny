@@ -42,6 +42,7 @@
           - libpq-dev
           - build-essential
           - ca-certificates
+          - strace
         state: present
 
     - name: System preparation complete
