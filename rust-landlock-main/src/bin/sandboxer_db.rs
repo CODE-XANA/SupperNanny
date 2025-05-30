@@ -1045,7 +1045,7 @@ fn process_denials(
                 updated = true;
             }
         } else {
-            // Handle paths
+            // Handle paths - CORRECTED SECTION
             let is_noncanonical = entry.starts_with("NONCANONICAL:");
             let path_str = if is_noncanonical {
                 entry.strip_prefix("NONCANONICAL:").unwrap_or(&entry)
@@ -1053,33 +1053,55 @@ fn process_denials(
                 &entry
             };
 
-            let path = PathBuf::from(path_str);
+            let original_path = PathBuf::from(path_str);
 
-            // Validate the path
-            if let Err(e) = AppPolicy::validate_path(&path) {
+            // Validate the original path first
+            if let Err(e) = AppPolicy::validate_path(&original_path) {
                 eprintln!("Warning: Skipping invalid path: {}", e);
                 continue;
             }
 
-            // If we couldn't canonicalize earlier, try again now
+            // Try to get a canonical path, but don't fail if we can't
             let canonical_path = if is_noncanonical {
-                match fs::canonicalize(&path) {
-                    Ok(p) => p,
+                match fs::canonicalize(&original_path) {
+                    Ok(p) => {
+                        println!("Successfully canonicalized {} to {}", original_path.display(), p.display());
+                        p
+                    },
                     Err(e) => {
-                        eprintln!(
-                            "Warning: Still unable to canonicalize path {}: {}",
-                            path.display(),
-                            e
-                        );
-                        // Skip paths we can't canonicalize for safety
-                        continue;
+                        // Handle common typos/corrections
+                        let corrected_path = if path_str == "/dev/nul" {
+                            println!("Detected typo: /dev/nul -> /dev/null");
+                            PathBuf::from("/dev/null")
+                        } else {
+                            println!(
+                                "Warning: Cannot canonicalize path {} ({}), using as-is",
+                                original_path.display(),
+                                e
+                            );
+                            original_path.clone()
+                        };
+                        
+                        // Try to canonicalize the corrected path
+                        match fs::canonicalize(&corrected_path) {
+                            Ok(p) => {
+                                println!("Corrected path canonicalized to: {}", p.display());
+                                p
+                            },
+                            Err(_) => {
+                                println!("Using non-canonical path: {}", corrected_path.display());
+                                corrected_path
+                            }
+                        }
                     }
                 }
             } else {
-                path.clone()
+                original_path.clone()
             };
 
+            // Check if this path is already in the policy
             if policy.contains_path(&canonical_path) {
+                println!("Path {} already in policy, skipping", canonical_path.display());
                 continue;
             }
 
@@ -1105,6 +1127,7 @@ fn process_denials(
                     }
                     policy.ro_paths.insert(canonical_path);
                     updated = true;
+                    println!("Added to read-only paths");
                 }
                 1 => {
                     // Check limits before adding
@@ -1117,8 +1140,11 @@ fn process_denials(
                     }
                     policy.rw_paths.insert(canonical_path);
                     updated = true;
+                    println!("Added to read-write paths");
                 }
-                _ => {}
+                _ => {
+                    println!("Path denied, not adding to policy");
+                }
             };
         }
     }
