@@ -55,6 +55,20 @@ JWTs are:
 * `POST /users/create_with_role` – Create a user and assign role.
 * `DELETE /users/:id` – Delete a user.
 
+### Rules
+
+These endpoints manage **runtime enforcement rules** used by the sandbox to restrict system-level operations (like file access, networking, etc.).
+
+* `GET /rules` – List all active rules enforced on the system.
+* `GET /rules/:id` – Inspect a specific rule.
+* `POST /rules` – Create a new rule for a target application or context.
+* `PUT /rules/:id` – Modify an existing rule.
+* `DELETE /rules/:id` – Remove a rule from the system.
+
+Each rule is bound to a subject (app or binary), and defines what actions are allowed or denied at runtime. These rules are automatically updated in the backend and may be reflected in the live monitoring dashboards.
+
+> Note: These are **system-level policies** enforced through the sandboxing layer and are independent from admin authentication or interface permissions.
+
 ### Roles & Permissions
 
 * `GET /roles` – List all roles.
