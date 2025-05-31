@@ -74,7 +74,7 @@ This part is managed by the nginx reverse proxy.
 
 ---
 
-### Security Guards
+## Security Guards
 
 SuperNanny API includes several runtime protections to mitigate abuse and unauthorized access:
 
@@ -83,7 +83,7 @@ SuperNanny API includes several runtime protections to mitigate abuse and unauth
 * **JWT Expiration**: Tokens expire after 60 minutes. Users must reauthenticate to regain access.
 * **Wrapper Guards**: Middleware components (like `Needs(permission)`) wrap sensitive endpoints to enforce consistent checks.
 
-## Security & CSRF Flow
+### Security & CSRF Flow
 
 1. **Login Phase**: Cookies `admin_token` (JWT) and `csrf_token` are set.
 2. **Session Initialization**: Frontend fetches `/admin/me`.
