@@ -29,53 +29,8 @@ SuperNanny is an innovative security solution designed to protect Linux workstat
 
 ## System Architecture
 
-```mermaid
-graph TB
-    %% User Workstation Flow
-    User[User Workstation] --> PAM[PAM SuperNanny Library]
-    PAM --> Auth[Axiom Authentication Server]
-    Auth --> Token[JWT Token + Permissions]
-    
-    User --> App[User Application]
-    App --> eBPF[eBPF Interceptor]
-    eBPF --> Kill[Kill Original Process]
-    eBPF --> Relaunch[Relaunch via Sandboxer]
-    
-    %% Sandboxing Flow
-    Relaunch --> Sandbox[SuperNanny Sandboxer]
-    Sandbox --> Landlock[Landlock LSM]
-    Sandbox --> Policy[Apply Security Policy]
-    Token --> Policy
-    
-    Policy --> Exec[Execute Sandboxed App]
-    Exec --> Monitor[Monitor & Log Events]
-    Monitor --> DB[(PostgreSQL Database)]
-    
-    %% Admin Interface Flow
-    Admin[Admin Interface] --> API[Rust API]
-    API --> RateLimit[Rate Limit Middleware]
-    RateLimit --> TokenVerif[Token Verification]
-    TokenVerif --> ReqLogger[Request Logger]
-    ReqLogger --> AdminServices[Admin Services]
-    
-    AdminServices --> Auth
-    AdminServices --> DB
-    
-    %% Monitoring & Alerting
-    DB --> Grafana[Grafana Dashboards]
-    DB --> Alerting[Real-time Alerting System]
-    DB --> TrafficAnalysis[Traffic Analysis & Security Logs]
-    TrafficAnalysis --> SecurityAnom[Security Anomaly Detection]
-    
-    %% Styling
-    style Sandbox fill:#ff9999
-    style Landlock fill:#99ff99
-    style Policy fill:#9999ff
-    style Auth fill:#e8f5e8
-    style DB fill:#f3e5f5
-    style Admin fill:#fff3e0
-    style Grafana fill:#ffebee
-```
+![SuperNanny rchitecture](https://i.ibb.co/fzBWtNrz/image-2025-05-31-230439270.png)
+
 
 ## Technical Components
 
