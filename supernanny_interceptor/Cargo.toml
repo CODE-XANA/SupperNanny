@@ -1,0 +1,17 @@
+[package]
+name = "ebpf-service"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+aya = "0.12"
+nix = { version = "0.27", features = ["process", "signal", "fs", "term"] }
+tokio = { version = "1.36", features = ["full"] }
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+libc = "0.2"
+bytes = "1"
+anyhow = "1"
+log = "0.4"
