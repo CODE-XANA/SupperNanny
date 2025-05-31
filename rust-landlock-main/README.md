@@ -1,122 +1,201 @@
-# SuperNanny Sandbox
-
-**SuperNanny** is a sandbox tool built with [Rust](https://www.rust-lang.org/) and [Landlock](https://docs.kernel.org/userspace-api/landlock.html), leveraging a PostgreSQL database to manage and store application security policies. The code for the sandbox’s main logic is contained in the [`sandboxer_db`](../src/bin/sandboxer_db.rs) file.
-
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Requirements](#requirements)
-3. [Build & Installation](#build--installation)
-4. [Database Setup](#database-setup)
-5. [Usage](#usage)
-6. [License](#license)
+# SuperNanny Sandboxer Module
 
 ## Overview
 
-- **sandboxer_db**: The main binary that:
-  1. Authenticates users against a Postgres DB.
-  2. Fetches/updates policies for a given application path.
-  3. Runs the application under Landlock confinement.
-  4. Uses `strace` to detect denied system calls and optionally updates policies dynamically.
+The SuperNanny Sandboxer is a critical security component of the SuperNanny project developed by ISEN Méditerranée students. This module implements application sandboxing on Linux workstations using Rust and the Landlock LSM (Linux Security Module) to create secure execution environments for user applications.
 
-Once installed as **`supernanny`**, you can asimply run `supernanny /path/to/app` to sandbox any application with the relevant policies.
+## Architecture Overview
 
-## Requirements
-
-- **Rust & Cargo**  
-  Make sure you have a recent version of Rust installed (via [rustup](https://rustup.rs/)).
-
-- **PostgreSQL**  
-  A running PostgreSQL instance is needed. Connection details (host, port, etc.) are typically read from a `.env` file.
-
-- **Landlock Support**  
-  Requires Linux **5.13** or newer for full Landlock functionality.
-
-- **strace** (optional but recommended)  
-  Used to detect denied syscalls in “learning” mode. Install with your system’s package manager.
-
-## Build & Installation
-
-1. **Clone** the repository and go into its directory (example):
-
-   ```bash
-   git clone https://github.com/yourusername/rust-landlock.git
-   cd rust-landlock
-   ```
-
-2. **Build** the `sandboxer_db` binary (release mode is recommended):
-
-   ```bash
-   cargo build --release --bin sandboxer_db
-   ```
-
-   This produces the binary at `target/release/sandboxer_db`.
-
-3. **Install** it as the `supernanny` command:
-
-   ```bash
-   sudo cp target/release/sandboxer_db /usr/local/bin/supernanny
-   sudo chmod +x /usr/local/bin/supernanny
-   ```
-
-   Now `supernanny` is accessible system-wide.
-
-> **Tip**: If you rebuild frequently, use a **symbolic link** so you don’t have to copy each time:
-
-```bash
-sudo ln -sf "$(realpath target/release/sandboxer_db)" /usr/local/bin/supernanny
+```mermaid
+graph TB
+    User[User Workstation] --> PAM[PAM SuperNanny Module]
+    PAM --> Auth[Authentication Server]
+    Auth --> Token[JWT Token + Permissions]
+    
+    User --> App[User Application]
+    App --> eBPF[eBPF Interceptor]
+    eBPF --> Kill[Kill Original Process]
+    eBPF --> Relaunch[Relaunch via Sandboxer]
+    
+    Relaunch --> Sandbox[SuperNanny Sandboxer]
+    Sandbox --> Landlock[Landlock LSM]
+    Sandbox --> Policy[Apply Security Policy]
+    
+    Policy --> Exec[Execute Sandboxed App]
+    Exec --> Monitor[Monitor & Log Denials]
+    Monitor --> DB[(PostgreSQL Database)]
+    
+    style Sandbox fill:#ff9999
+    style Landlock fill:#99ff99
+    style Policy fill:#9999ff
 ```
 
-## Database Setup
+## Core Components
 
-1. **Create/Edit a `.env` File**  
-   In your project directory, add a `.env` file with your DB connection info:
+### 1. Authentication Integration
+- **PAM Token Cache**: Integrates with PAM module to retrieve cached authentication tokens
+- **Token Refresh**: Automatically refreshes tokens nearing expiration
+- **Permission Verification**: Validates user permissions against the Axiom server
 
-   ```ini
-   DB_HOST=127.0.0.1
-   DB_PORT=5432
-   DB_USER=sandboxuser
-   DB_PASS=supernanny
-   DB_NAME=sandboxdb
-   STRACE_PATH=/usr/bin/strace
-   ```
+### 2. Policy Management
+The sandboxer implements comprehensive security policies including:
+- **Filesystem Access**: Read-only and read-write path restrictions
+- **Network Access**: TCP bind/connect port controls
+- **IP/Domain Filtering**: Allowed IP addresses and domain names
+- **Resource Limits**: Configurable limits to prevent policy expansion attacks
 
-2. **Run the SQL Setup Script** (if provided):  
-   If you have `sandboxdb_full_setup.sql`, run:
+### 3. Landlock Enforcement
+- **LSM Integration**: Uses Landlock Linux Security Module for kernel-level enforcement
+- **Ruleset Creation**: Dynamically creates Landlock rulesets based on application policies
+- **Access Control**: Enforces filesystem and network access restrictions at the kernel level
 
-   ```bash
-   psql -U postgres -d sandboxdb -f sandboxdb_full_setup.sql
-   ```
+### 4. Dynamic Policy Learning
+- **Strace Integration**: Uses strace to monitor application behavior and detect access denials
+- **Interactive Policy Updates**: Allows users to approve/deny new resource access requests
+- **Server Synchronization**: Submits policy updates to the Axiom server for admin approval
 
-   This creates all required tables (`users`, `roles`, `app_policy`, etc.) and seeds sample data (user accounts, default policies, etc.).
+## Sequence Diagrams
+
+### Application Launch Sequence
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Application
+    participant eBPF as eBPF Interceptor
+    participant Sandboxer as Sandboxer (LandLock)
+    participant Axiom as Axiom Server
+    participant DB as PostgreSQL
+
+    Note over User: User launches an application
+    User->>Application: Launch application (execve)
+    Application->>eBPF: Intercept execve/execveat
+    eBPF-->>Application: Kill original process
+
+    Note over Sandboxer: Sandboxer retrieves token and permissions
+    Sandboxer->>Sandboxer: Load stored JWT token (set earlier by PAM)
+    Sandboxer->>Sandboxer: Validate token + retrieve rules
+    Sandboxer->>Axiom: Query user/app permissions
+    Axiom-->>Sandboxer: Specific sandboxing rules
+    Sandboxer-->>Sandboxer: Validated sandbox configuration
+
+    Note over Sandboxer: Apply LandLock restrictions
+    Sandboxer->>Sandboxer: Setup LSM environment
+    Sandboxer->>Sandboxer: Apply filesystem/network restrictions
+    Sandboxer-->>Application: Relaunch application in sandbox
+    Application->>Application: Executes in restricted environment
+
+    alt Security violation
+        Application->>Sandboxer: Attempt unauthorized access
+        Sandboxer-->>Application: Block operation
+        Sandboxer->>Axiom: Log security event
+    else Normal operation
+        Application-->>User: Application runs as expected
+    end
+```
+
+### Authentication Flow
+
+```mermaid
+ sequenceDiagram
+    participant U as User
+    participant PAM as PAM SuperNanny Module
+    participant WS as Linux Workstation
+    participant AX as Axiom Server (Rust)
+    participant DB as PostgreSQL
+
+    Note over U,DB: System and SuperNanny authentication phase
+
+    U->>WS: Login to Linux system
+    WS->>PAM: Trigger authentication
+    PAM->>U: Request SuperNanny credentials
+    U->>PAM: SuperNanny Username/Password
+
+    Note over PAM,AX: Secure TLS communication
+    PAM->>AX: Authentication request + credentials
+    AX->>DB: Validate user and role
+    DB-->>AX: Validated user data
+
+    Note over AX: Generate JWT with role-based permissions
+    AX->>AX: Create JWT token (secret + expiry)
+    AX-->>PAM: JWT token + user permissions
+
+    PAM->>WS: Store token in secure memory
+    PAM-->>U: Authentication successful
+
+    Note over U,DB: User connected with active token
+```
+
+## Key Features
+
+### Security Policies
+```rust
+pub struct AppPolicy {
+    ro_paths: HashSet<PathBuf>,      // Read-only filesystem paths
+    rw_paths: HashSet<PathBuf>,      // Read-write filesystem paths
+    tcp_bind: HashSet<u16>,          // Allowed TCP bind ports
+    tcp_connect: HashSet<u16>,       // Allowed TCP connect ports
+    allowed_ips: HashSet<String>,    // Permitted IP addresses
+    allowed_domains: HashSet<String>, // Permitted domain names
+}
+```
+
+### Resource Limits
+- **Max Read-Only Paths**: 100
+- **Max Read-Write Paths**: 50
+- **Max TCP Bind Ports**: 20
+- **Max TCP Connect Ports**: 30
+- **Max Allowed IPs**: 50
+- **Max Allowed Domains**: 50
+
+### Access Denial Handling
+1. **Detection**: Uses strace to monitor system calls and detect EACCES/EPERM errors
+2. **Parsing**: Extracts denied resources (paths, ports, IPs, domains) from strace logs
+3. **User Interaction**: Presents approval dialogs for new resource access
+4. **Policy Updates**: Submits approved changes to the Axiom server for admin review
+
+## Technical Implementation
+
+### Landlock Integration
+The sandboxer creates Landlock rulesets with the following access controls:
+- **Filesystem**: `AccessFs::from_read()` and `AccessFs::from_all()` for RO/RW paths
+- **Network**: `AccessNet::BindTcp` and `AccessNet::ConnectTcp` for port restrictions
+
+### Error Handling
+- **Path Validation**: Prevents path traversal attacks and validates path lengths
+- **Canonical Paths**: Resolves symbolic links and relative paths
+- **Graceful Degradation**: Continues operation when non-critical errors occur
+
+### Security Considerations
+- **Token Security**: Tokens are zeroized from memory after use
+- **Path Sanitization**: All paths are validated and canonicalized
+- **Resource Limits**: Prevents policy expansion attacks through configurable limits
+- **Privilege Separation**: Runs with minimal required privileges
 
 ## Usage
 
-With everything built and installed, the usual workflow is:
-
+### Running Applications
 ```bash
-supernanny /usr/bin/my-app arg1 arg2 ...
+# Standard usage
+./sandboxer /path/to/application [args...]
+
+# Interactive authentication fallback
+./sandboxer --interactive-auth /path/to/application [args...]
 ```
 
-1. **User Login**  
-   You’ll be prompted for a username and password (stored in the `users` table of the DB).
+### Sandbox Mode (Internal)
+```bash
+# Called automatically by strace
+./sandboxer --sandbox /path/to/application [args...]
+```
 
-2. **Policy Fetch**  
-   The tool retrieves the relevant policy for your specified application path (e.g., `/usr/bin/my-app`) based on your role(s).
+## Integration with SuperNanny Ecosystem
 
-3. **Landlock Enforcement**  
-   The application runs under a Landlock sandbox. Denied operations (file/network) are logged.
+The sandboxer integrates seamlessly with other SuperNanny components:
+- **PAM Module**: Retrieves authentication tokens and user permissions
+- **eBPF Interceptor**: Receives application launch requests
+- **Axiom Server**: Fetches policies and submits updates
+- **PostgreSQL Database**: Logs denial events and policy changes
+- **Admin Panel**: Enables policy management and monitoring
 
-4. **Interactive Updates** (if you have `manage_policies` permission)  
-   If new denials are encountered, you can decide how to handle them (add read-only/read-write paths or bind/connect for network ports). Updated policies are saved in the DB for future runs.
-
-5. **Second Run (Optional)**  
-   You can optionally run the application again to confirm no further denials occur.
-
-## License
-
-[MIT](https://choosealicense.com/licenses/mit/)
-
-![ISEN Logo](./images/logo_isen.png)
-![SuperNanny Logo](./images/logo_supernanny.png)
-![Landlock Logo](./images/landlock.svg)
+This modular design ensures secure, scalable, and manageable application sandboxing across the entire SuperNanny infrastructure.
