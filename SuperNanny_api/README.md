@@ -109,6 +109,54 @@ SuperNanny API includes several runtime protections to mitigate abuse and unauth
 
 ---
 
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant Admin as Administrator
+    participant Web as Web Frontend
+    participant API as Admin API (Rust)
+    participant DB as PostgreSQL
+    participant Monitor as Monitoring (Grafana)
+    participant Alert as Alert System
+
+    Note over Admin, Alert: System administration
+    Admin->>Web: Login to admin interface
+    Web->>API: Admin authentication
+    API->>DB: Verify admin rights
+    DB-->>API: Admin permission granted
+    API-->>Web: Admin session established
+
+    Note over Admin, Alert: Manage users and policies
+    Admin->>Web: Create new user
+    Web->>API: User creation request
+    API->>API: Check admin rights (CRUD users)
+    API->>DB: Insert new user
+    DB-->>API: User created
+    API-->>Web: Success confirmation
+
+    Admin->>Web: Configure application policies
+    Web->>API: New security policy
+    API->>API: Validate rights (manage_policies)
+    API->>DB: Update sandboxing rules
+    DB-->>API: Policy saved
+
+    Note over Monitor, Alert: Real-time monitoring
+    Monitor->>Monitor: Continuous log stream
+    Monitor->>Monitor: Analyze security patterns
+    Note over Monitor: [Anomaly detected]
+    Monitor->>Alert: Trigger alert
+    Alert->>Admin: Real-time notification
+
+    Admin->>Web: Incident investigation
+    Web->>API: Request log details
+    API->>DB: Extract detailed logs
+    DB-->>API: Forensics data
+    API-->>Web: Full incident report
+```
+
+---
+
 ## API Folder Structure
 
 ```
@@ -156,6 +204,7 @@ api/
 * Only accessible from the Yew frontend or local admin tools.
 
 ---
+
 
 ## Contact
 
