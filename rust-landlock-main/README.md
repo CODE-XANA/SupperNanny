@@ -60,37 +60,37 @@ The sandboxer implements comprehensive security policies including:
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant Application
+    participant User as User
+    participant App as Application
     participant eBPF as eBPF Interceptor
-    participant Sandboxer as Sandboxer (LandLock)
+    participant Sandbox as Sandboxer (LandLock)
     participant Axiom as Axiom Server
     participant DB as PostgreSQL
 
-    Note over User: User launches an application
-    User->>Application: Launch application (execve)
-    Application->>eBPF: Intercept execve/execveat
-    eBPF-->>Application: Kill original process
+    Note over User, DB: User launches an application
+    User->>App: Launch application (execve)
+    App->>eBPF: Intercept execve/execveat
+    eBPF-->>App: Kill original process
 
-    Note over Sandboxer: Sandboxer retrieves token and permissions
-    Sandboxer->>Sandboxer: Load stored JWT token (set earlier by PAM)
-    Sandboxer->>Sandboxer: Validate token + retrieve rules
-    Sandboxer->>Axiom: Query user/app permissions
-    Axiom-->>Sandboxer: Specific sandboxing rules
-    Sandboxer-->>Sandboxer: Validated sandbox configuration
+    Note over Sandbox, DB: Sandboxer retrieves token and permissions
+    Sandbox->>Sandbox: Load stored JWT token (set earlier by PAM)
+    Sandbox->>Axiom: Validate token + retrieve rules
+    Axiom->>DB: Query user/app permissions
+    DB-->>Axiom: Specific sandboxing rules
+    Axiom-->>Sandbox: Validated sandbox configuration
 
-    Note over Sandboxer: Apply LandLock restrictions
-    Sandboxer->>Sandboxer: Setup LSM environment
-    Sandboxer->>Sandboxer: Apply filesystem/network restrictions
-    Sandboxer-->>Application: Relaunch application in sandbox
-    Application->>Application: Executes in restricted environment
+    Note over Sandbox: Apply LandLock restrictions
+    Sandbox->>Sandbox: Setup LSM environment
+    Sandbox->>Sandbox: Apply filesystem/network restrictions
+    Sandbox->>App: Relaunch application in sandbox
+    App->>App: Executes in restricted environment
 
     alt Security violation
-        Application->>Sandboxer: Attempt unauthorized access
-        Sandboxer-->>Application: Block operation
-        Sandboxer->>Axiom: Log security event
+        App->>Sandbox: Attempt unauthorized access
+        Sandbox->>DB: Log security event
+        Sandbox-->>App: Block operation
     else Normal operation
-        Application-->>User: Application runs as expected
+        App-->>User: Application runs as expected
     end
 ```
 
