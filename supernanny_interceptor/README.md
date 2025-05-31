@@ -301,3 +301,38 @@ Detailed comments:
 
         supernanny will then enforce the policy (via AppArmor/SELinux/eBPF LSM, etc.) before re-executing or blocking the binary.
 
+```mermaid
+sequenceDiagram
+    participant User as User
+    participant App as Application
+    participant eBPF as eBPF Interceptor
+    participant Sandbox as Sandboxer (LandLock)
+    participant Axiom as Axiom Server
+    participant DB as PostgreSQL
+
+    Note over User, DB: User launches an application
+    User->>App: Launch application (execve)
+    App->>eBPF: Intercept execve/execveat
+    eBPF-->>App: Kill original process
+
+    Note over Sandbox, DB: Sandboxer retrieves token and permissions
+    Sandbox->>Sandbox: Load stored JWT token (set earlier by PAM)
+    Sandbox->>Axiom: Validate token + retrieve rules
+    Axiom->>DB: Query user/app permissions
+    DB-->>Axiom: Specific sandboxing rules
+    Axiom-->>Sandbox: Validated sandbox configuration
+
+    Note over Sandbox: Apply LandLock restrictions
+    Sandbox->>Sandbox: Setup LSM environment
+    Sandbox->>Sandbox: Apply filesystem/network restrictions
+    Sandbox->>App: Relaunch application in sandbox
+    App->>App: Executes in restricted environment
+
+    alt Security violation
+        App->>Sandbox: Attempt unauthorized access
+        Sandbox->>DB: Log security event
+        Sandbox-->>App: Block operation
+    else Normal operation
+        App-->>User: Application runs as expected
+    end
+```
