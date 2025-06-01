@@ -46,6 +46,18 @@ pub async fn login(
             *entry = (0, now() + 600);
         }
         if entry.0 >= 5 {
+            // Avant de renvoyer le 429, on logue l’événement “brute_force_block”
+            if let Err(e) = crate::services::logs::db::insert(
+                &state.db,
+                None,                         // pas de username connu (tentative invalide)
+                Some(&ip),                    // IP source
+                "brute_force_block",          // action
+                Some("5 invalid login attempts in 10 minutes"), // détail
+                "warning",                    // gravité (voir la contrainte CHECK sur severity)
+            ) {
+                eprintln!("Failed to record brute-force event: {}", e);
+            }
+
             return HttpResponse::TooManyRequests()
                 .body("Trop de tentatives, réessayez dans quelques minutes.");
         }

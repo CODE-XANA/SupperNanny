@@ -27,17 +27,17 @@ async fn main() -> std::io::Result<()> {
     dotenv().ok();
     logger::init();
 
-    // -------- rustls provider global -------------------------------------------
+    // Mount du provider rustls
     CryptoProvider::install_default(default_provider())
         .expect("install rustls provider");
 
-    // -------- port HTTPS configurable ------------------------------------------
+    // Lecture du port HTTPS
     let https_port: u16 = env::var("HTTPS_PORT")
         .unwrap_or_else(|_| "9443".into())
         .parse()
         .expect("HTTPS_PORT must be a number");
 
-    // -------- pool Diesel -------------------------------------------------------
+    // Connexion PostgreSQL + pool
     let url = env::var("DATABASE_URL").unwrap_or_else(|_| {
         format!(
             "postgres://{}:{}@{}:{}/{}",
@@ -48,49 +48,55 @@ async fn main() -> std::io::Result<()> {
             env::var("DB_NAME").unwrap_or_else(|_| "postgres".into()),
         )
     });
+
     let pool = r2d2::Pool::builder()
         .build(ConnectionManager::<PgConnection>::new(url))
         .expect("DB pool");
 
-    let state = AppState::new(pool);
+    // Crée l’état (AppState) avec le pool
+    let state = AppState::new(pool.clone());
 
-    // -------- TLS config --------------------------------------------------------
+    // Configuration TLS
     let tls_cfg: ServerConfig = tls::rustls_config().expect("TLS config");
 
+    // CORS (autorise le front à 127.0.0.1:8444 en dev, puis 127.0.0.1 en prod)
     fn build_cors() -> Cors {
         Cors::default()
-            // --- dev -------------------------------------------------------
-            .allowed_origin("https://127.0.0.1:8444")  // static_server https
-            // --- prod ------------------------------------------------------
-            .allowed_origin("https://127.0.0.1")       // port 443 implicite
-            // ---------------------------------------------------------------
-            .allow_any_method()          // GET/POST/PUT/DELETE/OPTIONS
-            .allow_any_header()          // Content-Type, X-CSRF‑Token, …
-            .supports_credentials()      // indispensable pour le cookie JWT
+            .allowed_origin("https://127.0.0.1:8444")
+            .allowed_origin("https://127.0.0.1")
+            .allow_any_method()
+            .allow_any_header()
+            .supports_credentials()
             .max_age(3600)
     }
 
-    // -------- app factory -------------------------------------------------------
+    // Factory pour créer l’App
     let make_app = {
         let state = state.clone();
+        let db_pool = pool.clone(); 
         move || {
             App::new()
+                // 1) Enregistrement de AppState dans le Data<>
                 .app_data(web::Data::new(state.clone()))
-                .wrap(IpLimiter)
+                // 2) Middleware rate limiter (avec accès au pool)
+                .wrap(IpLimiter::new(db_pool.clone()))
+                // 3) CORS + logger
                 .wrap(build_cors())
                 .wrap(Logger::default())
-                // routes publiques
+                // 4) Routes publiques (login, logout, etc.)
                 .configure(admin::config)
+                // 5) /logs (protégé par CSRF et JWT Needs(VIEW_EVENTS))
                 .configure(logs::init)
-                // routes protégées
+                // 6) Autres endpoints protégés
                 .configure(users::init)
                 .configure(roles::init)
                 .configure(rules::init)
+                // 7) Événements (exemple : /events, Need Guard)
                 .configure(logs::init_with_guard)
         }
     };
 
-    // -------- HTTPS -------------------------------------------------------------
+    // On lie le serveur sur le port HTTPS configuré
     HttpServer::new(make_app)
         .bind_rustls_0_23(("0.0.0.0", https_port), tls_cfg)?
         .run()

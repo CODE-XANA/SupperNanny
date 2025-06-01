@@ -1,47 +1,21 @@
-use actix_web::{post, web, HttpResponse};
-use notify_rust::Notification;
-use serde_json::Value;
+use actix_web::{get, web, HttpResponse};
+use crate::{state::AppState, services::logs::db};
+use crate::admin::{Needs, jwt::VIEW_EVENTS};
+use crate::admin::csrf::Csrf;
 
-use crate::{
-    admin::{Needs, jwt::VIEW_EVENTS},
-    admin::csrf::Csrf,
-    state::AppState,
-};
-
-#[post("/alert")]
-pub async fn alert(_state: web::Data<AppState>, payload: web::Json<Value>) -> HttpResponse {
-    let summary = payload.get("annotations")
-        .and_then(|a| a.get("summary"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("Trop de logs 'denied' détectés dans la dernière minute !");
-
-    if let Err(e) = Notification::new()
-        .summary("Alerte Grafana")
-        .body(summary)
-        .icon("dialog-warning")
-        .show()
-    {
-        return HttpResponse::InternalServerError().body(e.to_string());
+#[get("/security")]
+async fn security_logs(state: web::Data<AppState>) -> HttpResponse {
+    match db::last_10(&state.db) {
+        Ok(rows) => HttpResponse::Ok().json(rows),
+        Err(e)   => HttpResponse::InternalServerError().body(e.to_string()),
     }
-
-    // optional persistence
-    #[cfg(feature = "persist_logs")]
-    {
-        let _ = crate::services::logs::db::insert(&state.db,
-            crate::services::logs::db::NewLogEntry { level: "WARN", message: summary });
-    }
-
-    HttpResponse::Ok().finish()
 }
 
-// ---------------------------------------------------------------------------
-
-
-pub fn config(cfg: &mut web::ServiceConfig) {
+pub fn init(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/events")
+        web::scope("/logs")
             .wrap(Csrf)
             .wrap(Needs(VIEW_EVENTS))
-            .service(alert)
+            .service(security_logs)
     );
 }

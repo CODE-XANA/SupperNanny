@@ -7,10 +7,14 @@ use actix_web::{
 use futures_util::future::{ready, LocalBoxFuture, Ready};
 use std::sync::Arc;
 
-/* -------------------------------------------------------------------------- */
-/*                      Middleware – vérif. du jeton CSRF                      */
-/* -------------------------------------------------------------------------- */
+use crate::{
+    services::logs::db::insert as record_security_event,
+    state::AppState,
+};
 
+/* -------------------------------------------------------------------------- */
+/* Middleware – vérification du jeton CSRF                                    */
+/* -------------------------------------------------------------------------- */
 #[derive(Clone)]
 pub struct Csrf;
 
@@ -46,16 +50,31 @@ where
     fn call(&self, req: ServiceRequest) -> Self::Future {
         let require_check = matches!(req.method().as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
         let inner         = self.inner.clone();
+        let ip            = req.connection_info().realip_remote_addr().unwrap_or("unknown").to_string();
+        let pool          = req
+            .app_data::<actix_web::web::Data<AppState>>()
+            .map(|d| d.db.clone());
 
         Box::pin(async move {
             if require_check {
-                // Cookie + header doivent être présents & identiques
-                match (req.cookie("csrf_token"), req.headers().get("x-csrf-token")) {
-                    (Some(c), Some(h)) if h == c.value() => {}
-                    _ => {
-                        let resp = HttpResponse::Forbidden().finish().map_into_boxed_body();
-                        return Ok(req.into_response(resp));
+                let valid = matches!(
+                    (req.cookie("csrf_token"), req.headers().get("x-csrf-token")),
+                    (Some(c), Some(h)) if h == c.value()
+                );
+
+                if !valid {
+                    if let Some(pool) = pool {
+                        let _ = record_security_event(
+                            &pool,
+                            None,
+                            Some(&ip),
+                            "csrf_mismatch",
+                            None,
+                            "warning",
+                        );
                     }
+                    let resp = HttpResponse::Forbidden().finish().map_into_boxed_body();
+                    return Ok(req.into_response(resp));
                 }
             }
 

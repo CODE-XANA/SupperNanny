@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SuperNanny</title>
+    <link rel="stylesheet" href="styles.css" />
+    
+    
+  <link rel="modulepreload" href="/frontend-74e21881dc7858f4.js" crossorigin="anonymous" integrity="sha384-QKOaEcgruMvMbjRIqjBVPVnku1//F9BNSfwLk/XTdsy6SFNpqpvqLmJkAHPe04go"><link rel="preload" href="/frontend-74e21881dc7858f4_bg.wasm" crossorigin="anonymous" integrity="sha384-RRvc/wYdeyDOq3umMrKB9RlH1UD9T2DuwNZL7+lnoEvSsI209Xh8ZBv+0gzaD9uI" as="fetch" type="application/wasm"></head>
+  <body>
+    <div id="root"></div>
+  
+<script type="module">
+import init, * as bindings from '/frontend-74e21881dc7858f4.js';
+const wasm = await init({ module_or_path: '/frontend-74e21881dc7858f4_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script></body>
+</html>
