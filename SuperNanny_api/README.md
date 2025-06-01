@@ -84,7 +84,9 @@ Each rule is bound to a subject (app or binary), and defines what actions are al
 
 ### Dashboard / Logs
 
-This part is managed by the nginx reverse proxy.
+* Grafana dashboard and alerting are handled via the NGINX reverse proxy (HTTPS, embedded iframe, `/grafana/`, `/alerts-publish`, `/alerts-sub`).  
+* For API security‐event logs (rate‐limit blocks, invalid JWT, forbidden access, etc.), use the internal endpoint:  
+  * `GET /logs/security` – Retrieve the last 10 security events from `security_logs` (requires `view_events` permission).  
 
 ---
 
