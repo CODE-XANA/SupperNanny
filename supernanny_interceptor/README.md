@@ -195,6 +195,7 @@ user@host:~$ docker run -it ubuntu /bin/bash
 ```
 → You can add logic to launch an xterm or other container within the same TTY via supernanny.
 
+### For the 01/06/2025 release, Landlock does not allow docker sandboxing. But the interceptor already intercepts docker commands for future updates of Landlock
 
 ---
 
