@@ -53,6 +53,7 @@ The frontend exposes four core views beyond the login screen, each gated by perm
 
 * Embedded Grafana dashboard via iframe (`/grafana/`).
 * Displays live metrics, logs, and event filters.
+* Fetches and shows API security logs from the `/logs/security` endpoint in a collapsible panel.
 * Bearer token is injected by NGINX for secure embedding.
 * Requires `view_dashboard` permission.
 
