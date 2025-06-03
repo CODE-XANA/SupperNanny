@@ -23,6 +23,38 @@ const TOKEN_CACHE_DIR: &str = "supernanny";
 const TOKEN_CACHE_FILE: &str = "session.cache";
 const TOKEN_VALIDITY_HOURS: u64 = 8;
 
+// Add logging macro
+macro_rules! pam_log {
+    ($level:expr, $($arg:tt)*) => {
+        {
+            use std::io::Write;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let msg = format!("[{}] PAM_SUPERNANNY {}: {}\n", 
+                timestamp, $level, format!($($arg)*));
+            
+            // Try to write to syslog via logger command
+            let _ = std::process::Command::new("logger")
+                .arg("-p")
+                .arg("auth.info")
+                .arg("-t")
+                .arg("pam_supernanny")
+                .arg(&msg.trim())
+                .output();
+            
+            // Also try to write to a debug file
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/pam_supernanny.log") {
+                let _ = file.write_all(msg.as_bytes());
+            }
+        }
+    };
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct CachedToken {
     token: String,
@@ -118,45 +150,80 @@ pub unsafe extern "C" fn pam_sm_authenticate(
     argc: i32,
     argv: *const *const c_char,
 ) -> i32 {
+    pam_log!("INFO", "PAM module called");
+    
     let args = parse_pam_args(argc, argv);
+    pam_log!("DEBUG", "PAM args: {:?}", args);
+    
     match handle_authenticate(pamh, &args) {
-        Ok(_) => 0,  // PAM_SUCCESS
-        Err(_) => 7, // PAM_AUTH_ERR
+        Ok(_) => {
+            pam_log!("INFO", "Authentication successful");
+            0  // PAM_SUCCESS
+        },
+        Err(e) => {
+            pam_log!("ERROR", "Authentication failed: {}", e);
+            7 // PAM_AUTH_ERR
+        }
     }
 }
 
 fn handle_authenticate(pamh: *mut PamHandle, args: &[String]) -> Result<()> {
     let username = get_pam_user(pamh)?;
+    pam_log!("INFO", "Authenticating user: {}", username);
+    
     let uid = get_user_uid(&username)?;
+    pam_log!("DEBUG", "User UID: {}", uid);
+    
     let use_first_pass = args.iter().any(|arg| arg == "use_first_pass");
+    pam_log!("DEBUG", "use_first_pass: {}", use_first_pass);
+
+    // Check if we should skip server authentication (debug mode)
+    let debug_mode = args.iter().any(|arg| arg == "debug_skip_server");
+    if debug_mode {
+        pam_log!("INFO", "Debug mode: skipping server authentication");
+        return Ok(());
+    }
 
     // Check cached token first
     if let Ok(cached) = load_cached_token(uid) {
+        pam_log!("DEBUG", "Found cached token for user: {}", cached.username);
         if !cached.is_expired() && cached.username == username {
+            pam_log!("INFO", "Using valid cached token");
             return Ok(());
         }
         if cached.is_near_expiry() {
+            pam_log!("DEBUG", "Token near expiry, attempting refresh");
             if let Some(rt) = &cached.refresh_token {
                 if let Ok(new) = refresh_auth_token(rt, &username) {
                     save_cached_token(uid, &new)?;
+                    pam_log!("INFO", "Token refreshed successfully");
                     return Ok(());
                 }
             }
         }
+        pam_log!("DEBUG", "Cached token expired or invalid");
+    } else {
+        pam_log!("DEBUG", "No cached token found");
     }
 
     // Get password
+    pam_log!("DEBUG", "Getting password from PAM");
     let password = if use_first_pass {
         get_pam_password_with_fallback(pamh)?
     } else {
         match get_pam_password_with_fallback(pamh) {
             Ok(pass) => pass,
-            Err(_) => get_password_via_conversation(pamh)?,
+            Err(e) => {
+                pam_log!("DEBUG", "Failed to get password from PAM tokens: {}, trying conversation", e);
+                get_password_via_conversation(pamh)?
+            }
         }
     };
     
+    pam_log!("DEBUG", "Password obtained, authenticating with server");
     let token = authenticate_with_server(&username, &password)?;
     save_cached_token(uid, &token)?;
+    pam_log!("INFO", "Server authentication successful, token cached");
     Ok(())
 }
 
@@ -167,6 +234,7 @@ pub unsafe extern "C" fn pam_sm_setcred(
     _argc: i32,
     _argv: *const *const c_char,
 ) -> i32 {
+    pam_log!("DEBUG", "pam_sm_setcred called");
     0
 }
 
@@ -177,9 +245,16 @@ pub unsafe extern "C" fn pam_sm_open_session(
     _argc: i32,
     _argv: *const *const c_char,
 ) -> i32 {
+    pam_log!("DEBUG", "pam_sm_open_session called");
     match handle_session_open(pamh) {
-        Ok(_) => 0,
-        Err(_) => 12,
+        Ok(_) => {
+            pam_log!("INFO", "Session opened successfully");
+            0
+        },
+        Err(e) => {
+            pam_log!("ERROR", "Session open failed: {}", e);
+            12
+        }
     }
 }
 
@@ -190,6 +265,7 @@ pub unsafe extern "C" fn pam_sm_close_session(
     _argc: i32,
     _argv: *const *const c_char,
 ) -> i32 {
+    pam_log!("DEBUG", "pam_sm_close_session called");
     0
 }
 
@@ -208,10 +284,12 @@ fn get_pam_user(pamh: *mut PamHandle) -> Result<String> {
         let mut ptr: *const c_char = std::ptr::null();
         let r = pam_sys::raw::pam_get_item(pamh, PAM_USER, &mut ptr as *mut _ as *mut *const c_void);
         if r != 0 || ptr.is_null() {
-            return Err(anyhow!("Failed to get PAM_USER"));
+            return Err(anyhow!("Failed to get PAM_USER, code: {}", r));
         }
         let cstr = CStr::from_ptr(ptr);
-        Ok(cstr.to_string_lossy().into_owned())
+        let username = cstr.to_string_lossy().into_owned();
+        pam_log!("DEBUG", "Retrieved PAM_USER: {}", username);
+        Ok(username)
     }
 }
 
@@ -221,7 +299,7 @@ fn get_pam_authtok(pamh: *mut PamHandle) -> Result<String> {
         let r = pam_sys::raw::pam_get_item(pamh, PAM_AUTHTOK, &mut ptr as *mut _ as *mut *const c_void);
         
         if r != 0 || ptr.is_null() {
-            return Err(anyhow!("PAM_AUTHTOK unavailable"));
+            return Err(anyhow!("PAM_AUTHTOK unavailable, code: {}", r));
         }
         
         let cstr = match CStr::from_ptr(ptr).to_str() {
@@ -230,7 +308,7 @@ fn get_pam_authtok(pamh: *mut PamHandle) -> Result<String> {
         };
         
         if cstr.is_empty() || cstr.len() > 1024 {
-            return Err(anyhow!("PAM_AUTHTOK invalid length"));
+            return Err(anyhow!("PAM_AUTHTOK invalid length: {}", cstr.len()));
         }
         
         let has_reasonable_chars = cstr.chars().all(|c| c.is_ascii() && (c.is_alphanumeric() || c.is_ascii_punctuation() || c == ' '));
@@ -238,6 +316,7 @@ fn get_pam_authtok(pamh: *mut PamHandle) -> Result<String> {
             return Err(anyhow!("PAM_AUTHTOK contains invalid characters"));
         }
         
+        pam_log!("DEBUG", "Retrieved PAM_AUTHTOK (length: {})", cstr.len());
         Ok(cstr.to_string())
     }
 }
@@ -256,6 +335,7 @@ fn get_pam_password_with_fallback(pamh: *mut PamHandle) -> Result<String> {
         if r == 0 && !ptr.is_null() {
             if let Ok(cstr) = CStr::from_ptr(ptr).to_str() {
                 if !cstr.is_empty() && cstr.len() < 1024 {
+                    pam_log!("DEBUG", "Retrieved PAM_OLDAUTHTOK (length: {})", cstr.len());
                     return Ok(cstr.to_string());
                 }
             }
@@ -266,15 +346,16 @@ fn get_pam_password_with_fallback(pamh: *mut PamHandle) -> Result<String> {
 }
 
 fn get_password_via_conversation(pamh: *mut PamHandle) -> Result<String> {
+    pam_log!("DEBUG", "Attempting to get password via PAM conversation");
     unsafe {
         let mut conv_ptr: *const c_void = std::ptr::null();
         let result = pam_sys::raw::pam_get_item(pamh, PAM_CONV, &mut conv_ptr as *mut *const c_void);
         if result != 0 || conv_ptr.is_null() {
-            return Err(anyhow!("PAM_CONV unavailable"));
+            return Err(anyhow!("PAM_CONV unavailable, code: {}", result));
         }
         
         let conv = &*(conv_ptr as *const PamConv);
-        let prompt = CString::new("Password: ").unwrap();
+        let prompt = CString::new("SuperNanny Password: ").unwrap();
         let msg = PamMessage { 
             msg_style: PAM_PROMPT_ECHO_OFF, 
             msg: prompt.as_ptr() 
@@ -290,7 +371,7 @@ fn get_password_via_conversation(pamh: *mut PamHandle) -> Result<String> {
         );
         
         if result != 0 || resp_ptr.is_null() {
-            return Err(anyhow!("Conversation failed"));
+            return Err(anyhow!("Conversation failed, code: {}", result));
         }
         
         let resp = &*resp_ptr;
@@ -312,6 +393,7 @@ fn get_password_via_conversation(pamh: *mut PamHandle) -> Result<String> {
             return Err(anyhow!("Empty password"));
         }
         
+        pam_log!("DEBUG", "Password obtained via conversation (length: {})", password.len());
         Ok(password)
     }
 }
@@ -319,32 +401,51 @@ fn get_password_via_conversation(pamh: *mut PamHandle) -> Result<String> {
 fn get_user_uid(username: &str) -> Result<u32> {
     let out = std::process::Command::new("id").arg("-u").arg(username).output()?;
     if !out.status.success() {
-        return Err(anyhow!("Failed to get UID"));
+        return Err(anyhow!("Failed to get UID for user: {}", username));
     }
     let s = String::from_utf8(out.stdout)?;
-    Ok(s.trim().parse()?)
+    let uid = s.trim().parse()?;
+    pam_log!("DEBUG", "User {} has UID: {}", username, uid);
+    Ok(uid)
 }
 
 fn authenticate_with_server(username: &str, password: &str) -> Result<CachedToken> {
     let url = std::env::var("SUPERNANNY_SERVER_URL").unwrap_or_else(|_| "https://127.0.0.1:8443".into());
+    pam_log!("DEBUG", "Authenticating with server: {}", url);
+    
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     
     let payload = serde_json::json!({ "username": username, "password": password });
-    let resp = client.post(&format!("{}/auth/login", url)).json(&payload).send()?;
+    
+    let resp = match client.post(&format!("{}/auth/login", url)).json(&payload).send() {
+        Ok(resp) => resp,
+        Err(e) => {
+            pam_log!("ERROR", "Failed to connect to server {}: {}", url, e);
+            return Err(anyhow!("Server connection failed: {}", e));
+        }
+    };
+    
+    pam_log!("DEBUG", "Server response status: {}", resp.status());
     
     if !resp.status().is_success() {
-        return Err(anyhow!("Authentication failed: {}", resp.status()));
+        let status = resp.status();
+        let body = resp.text().unwrap_or_else(|_| "Unknown error".to_string());
+        pam_log!("ERROR", "Authentication failed: {} - {}", status, body);
+        return Err(anyhow!("Authentication failed: {} - {}", status, body));
     }
     
     let lr: LoginResponse = resp.json()?;
+    pam_log!("INFO", "Server authentication successful");
     Ok(CachedToken::new(lr.token, username.to_string(), lr.refresh_token))
 }
 
 fn refresh_auth_token(rt: &str, username: &str) -> Result<CachedToken> {
     let url = std::env::var("SUPERNANNY_SERVER_URL").unwrap_or_else(|_| "https://127.0.0.1:8443".into());
+    pam_log!("DEBUG", "Refreshing token with server: {}", url);
+    
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(10))
@@ -355,10 +456,12 @@ fn refresh_auth_token(rt: &str, username: &str) -> Result<CachedToken> {
         .send()?;
     
     if !resp.status().is_success() {
+        pam_log!("ERROR", "Token refresh failed: {}", resp.status());
         return Err(anyhow!("Token refresh failed"));
     }
     
     let lr: LoginResponse = resp.json()?;
+    pam_log!("INFO", "Token refreshed successfully");
     Ok(CachedToken::new(lr.token, username.to_string(), lr.refresh_token))
 }
 
@@ -382,6 +485,7 @@ fn save_cached_token(uid: u32, token: &CachedToken) -> Result<()> {
         .mode(0o600)
         .open(&file)?;
     f.write_all(serde_json::to_string_pretty(token)?.as_bytes())?;
+    pam_log!("DEBUG", "Token cached to: {:?}", file);
     Ok(())
 }
 
@@ -390,13 +494,16 @@ fn load_cached_token(uid: u32) -> Result<CachedToken> {
     let mut f = File::open(&file)?;
     let mut s = String::new();
     f.read_to_string(&mut s)?;
-    Ok(serde_json::from_str(&s)?)
+    let token: CachedToken = serde_json::from_str(&s)?;
+    pam_log!("DEBUG", "Loaded cached token from: {:?}", file);
+    Ok(token)
 }
 
 fn clean_cached_token(uid: u32) -> Result<()> {
     let file = get_cache_file_path(uid);
     if file.exists() {
         fs::remove_file(&file)?;
+        pam_log!("DEBUG", "Cleaned cached token: {:?}", file);
     }
     Ok(())
 }
