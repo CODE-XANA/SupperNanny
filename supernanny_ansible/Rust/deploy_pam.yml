@@ -3,7 +3,6 @@
   hosts: supernanny
   gather_facts: yes
   become: false
-
   vars:
     user_home: "{{ ansible_user_dir }}"
     project_root: "{{ user_home }}/SupperNanny"
@@ -32,7 +31,9 @@
     - name: Install required dependencies
       become: true
       apt:
-        name: libpam0g-dev
+        name: 
+          - libpam0g-dev
+          - pamtester
         state: present
 
     - name: Install Rust and Cargo
@@ -40,6 +41,7 @@
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
       args:
         executable: /bin/bash
+      when: not ansible_facts['env']['HOME'] + '/.cargo/bin/cargo' is file
 
     - name: "Step 1/4: Starting PAM module compilation"
       debug:
@@ -47,7 +49,7 @@
 
     - name: "Step 2/4: Compile PAM module in release mode"
       shell: |
-        /home/kali/.cargo/bin/cargo build --release
+        $HOME/.cargo/bin/cargo build --release
       args:
         chdir: "{{ pam_dir }}"
         executable: /bin/bash
@@ -60,26 +62,89 @@
         mode: '0755'
         remote_src: yes
 
-    - name: "Step 4/4: Configure PAM service"
+    - name: "Step 4/4: Configure PAM service for testing"
       become: true
       copy:
         dest: "/etc/pam.d/{{ pam_service }}"
         content: |
-          auth required pam_unix.so
-          auth required libpam_supernanny.so
+          # PAM configuration for SuperNanny debug testing
+          auth [success=ok new_authtok_reqd=ok ignore=ignore default=bad] pam_unix.so
+          auth [success=ok new_authtok_reqd=ok ignore=ignore default=bad] libpam_supernanny.so debug_skip_server
+          account required pam_unix.so
         mode: '0644'
 
-    - name: "Test PAM module with dual authentication"
-      shell: |
-        printf "%s\n" "{{ become_password }}" | pamtester {{ pam_service }} kali authenticate
-      register: pam_test_result
-      ignore_errors: yes
-      no_log: true  # Ensures password is not logged
+    - name: "Create debug PAM service (server mode)"
+      become: true
+      copy:
+        dest: "/etc/pam.d/{{ pam_service }}-server"
+        content: |
+          # PAM configuration for SuperNanny with server authentication
+          auth [success=ok new_authtok_reqd=ok ignore=ignore default=bad] pam_unix.so
+          auth [success=ok new_authtok_reqd=ok ignore=ignore default=bad] libpam_supernanny.so
+          account required pam_unix.so
+        mode: '0644'
 
-    - name: "Display PAM test result"
+    - name: "Clear any existing debug logs"
+      become: true
+      file:
+        path: /tmp/pam_supernanny.log
+        state: absent
+
+    - name: "Test PAM module (debug mode - no server required)"
+      shell: |
+        printf "%s\n" "{{ become_password }}" | pamtester {{ pam_service }} {{ ansible_user_id }} authenticate
+      register: pam_test_debug
+      ignore_errors: yes
+      no_log: true
+
+    - name: "Display debug test result"
       debug:
-        var: pam_test_result
-      when: pam_test_result is defined
+        var: pam_test_debug
+
+    - name: "Check if SuperNanny server is running"
+      uri:
+        url: "https://127.0.0.1:8443/health"
+        method: GET
+        validate_certs: no
+        timeout: 5
+      register: server_check
+      ignore_errors: yes
+
+    - name: "Test PAM module (server mode - requires running server)"
+      shell: |
+        printf "%s\n" "{{ become_password }}" | pamtester {{ pam_service }}-server {{ ansible_user_id }} authenticate
+      register: pam_test_server
+      ignore_errors: yes
+      no_log: true
+      when: server_check.status is defined and server_check.status == 200
+
+    - name: "Display server test result"
+      debug:
+        var: pam_test_server
+      when: pam_test_server is defined
+
+    - name: "Display server status"
+      debug:
+        msg: "SuperNanny server is {{ 'running' if (server_check.status is defined and server_check.status == 200) else 'not running' }}"
+
+    - name: "Show PAM debug logs"
+      shell: cat /tmp/pam_supernanny.log
+      register: pam_logs
+      ignore_errors: yes
+
+    - name: "Display PAM debug logs"
+      debug:
+        var: pam_logs.stdout_lines
+      when: pam_logs.stdout_lines is defined and pam_logs.stdout_lines | length > 0
+
+    - name: "Check system auth logs"
+      become: true
+      shell: tail -n 20 /var/log/auth.log | grep -E "(pamtester|pam_supernanny)" || echo "No relevant auth log entries"
+      register: auth_logs
+
+    - name: "Display system auth logs"
+      debug:
+        var: auth_logs.stdout_lines
 
     - name: "Check PAM module file"
       stat:
@@ -88,15 +153,35 @@
 
     - name: "Display PAM module file info"
       debug:
-        var: pam_module_file
-      when: pam_module_file is defined
+        var: pam_module_file.stat
+      when: pam_module_file.stat.exists
 
-    - name: "Check PAM configuration file"
+    - name: "Check PAM configuration files"
       stat:
-        path: "/etc/pam.d/{{ pam_service }}"
-      register: pam_config_file
+        path: "/etc/pam.d/{{ item }}"
+      register: pam_config_files
+      loop:
+        - "{{ pam_service }}"
+        - "{{ pam_service }}-server"
 
     - name: "Display PAM configuration file info"
       debug:
-        var: pam_config_file
-      when: pam_config_file is defined
+        msg: "{{ item.item }}: {{ 'exists' if item.stat.exists else 'missing' }}"
+      loop: "{{ pam_config_files.results }}"
+
+    - name: "Show PAM configuration content"
+      become: true
+      shell: "cat /etc/pam.d/{{ item }}"
+      register: pam_configs
+      loop:
+        - "{{ pam_service }}"
+        - "{{ pam_service }}-server"
+      ignore_errors: yes
+
+    - name: "Display PAM configurations"
+      debug:
+        msg: |
+          {{ item.item }}:
+          {{ item.stdout }}
+      loop: "{{ pam_configs.results }}"
+      when: item.stdout is defined
