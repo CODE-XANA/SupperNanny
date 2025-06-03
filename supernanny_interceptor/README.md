@@ -122,6 +122,7 @@ Although not detailed here, it is the binary that:
     - Ensure that /sys/kernel/debug/tracing is mounted:
     ```bash
     mount -t tracefs nodev /sys/kernel/debug/tracing
+    sudo echo 1>/sys/kernel/debug/tracing/events/syscalls/sys_enter_execve/enable
 
 ---
 
