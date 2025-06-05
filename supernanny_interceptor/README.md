@@ -113,7 +113,12 @@ Although not detailed here, it is the binary that:
 4. pkg-config, libbpf-dev (optional, depending on your distribution).
     ```bash
     sudo apt-get install pkg-config libbpf-dev
-5. Permissions:
+
+5. Creation of the vmlinux.h file :
+   ```bash
+   bpftool btf dump file /sys/kernel/btf/vmlinux format c > SupperNanny/supernanny_interceptor/src/ebpf/kern/vmlinux.h
+
+6. Permissions:
 
     - To load eBPF programs, the kernel must be configured with CONFIG_BPF_SYSCALL=y and CONFIG_DEBUG_INFO_BTF=y.
 
