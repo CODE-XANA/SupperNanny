@@ -1,0 +1,150 @@
+- name: worker node
+  hosts: localhost
+  become: true
+  vars_files:
+    - ../secret.yaml
+  vars:
+    pod_network_cidr: "192.168.0.0/16"
+    calico_version: "v3.30.0"
+    worker_node_name: "workernode1" 
+
+  tasks:
+
+    - name: Mettre à jour et upgrader le système
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Désactiver le swap dans le fichier fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^\s*/swap'
+        state: absent
+
+    - name: Installer containerd
+      apt:
+        name: containerd
+        state: present
+
+    - name: Créer le répertoire de configuration de containerd
+      file:
+        path: /etc/containerd
+        state: directory
+
+    - name: Générer la configuration par défaut de containerd
+      shell: containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Redémarrer et activer containerd
+      systemd:
+        name: containerd
+        enabled: true
+        state: restarted
+
+    - name: Installer les dépendances de Kubernetes
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+        state: present
+
+    - name: Ajouter la clé APT de Kubernetes
+      shell: |
+        mkdir -p -m 755 /etc/apt/keyrings
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | \
+        gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Ajouter le dépôt Kubernetes
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /
+
+    - name: Mettre à jour le cache APT pour Kubernetes
+      apt:
+        update_cache: yes
+
+    - name: Installer les composants de Kubernetes
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+
+    - name: Geler les paquets Kubernetes avec apt-mark hold
+      command: apt-mark hold {{ item }}
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: Activer le service kubelet
+      systemd:
+        name: kubelet
+        enabled: true
+        state: started
+
+    - name: Activer l'IP forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: Joindre le nœud au cluster Kubernetes
+      command: >
+        kubeadm join {{ master_address }}:6443
+        --token {{ kubeadm_token }}
+        --discovery-token-ca-cert-hash sha256:{{ ca_cert_hash }}
+      register: kubeadm_join_output
+      changed_when: "'This node has joined the cluster' in kubeadm_join_output.stdout"
+
+    - name: Installer le client Python de Kubernetes
+      apt:
+        name: python3-kubernetes
+        state: present
+
+    # - name: Déployer les CRDs de Calico
+    #   kubernetes.core.k8s:
+    #     kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+    #     state: present
+    #     src: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/operator-crds.yaml
+
+    # - name: Télécharger les ressources personnalisées de Calico
+    #   get_url:
+    #     url: https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml
+    #     dest: /tmp/custom-resources.yaml
+
+    # - name: Appliquer les ressources personnalisées de Calico
+    #   kubernetes.core.k8s:
+    #     kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+    #     state: present
+    #     src: /tmp/custom-resources.yaml
+
+    - name: Appliquer le manifeste Calico via kubectl
+      ansible.builtin.command:
+        cmd: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+
+    - name: Attendre que le nœud worker Kubernetes soit en état Ready
+      become: false
+      shell: kubectl get node {{ worker_node_name }} --no-headers | grep -q ' Ready '
+      register: node_ready_check
+      retries: 20
+      delay: 10
+      until: node_ready_check.rc == 0
+      changed_when: false
+
+    - name: Afficher l'état du nœud worker Kubernetes
+      become: false
+      shell: kubectl get node {{ worker_node_name }}
+      register: kube_node_output
+      changed_when: false
+
+    - name: Afficher la sortie de la commande kubectl get node
+      debug:
+        msg: "{{ kube_node_output.stdout_lines }}"

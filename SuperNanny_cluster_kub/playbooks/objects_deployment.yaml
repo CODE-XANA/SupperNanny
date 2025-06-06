@@ -1,0 +1,74 @@
+- name: Déployer les pods nécessaires au worker node Kubernetes
+  hosts: localhost
+  gather_facts: false
+  tasks:
+
+    - name: Créer le secret Kubernetes postgres-secret avec le mot de passe
+      kubernetes.core.k8s:
+        namespace: default
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postgres-secret
+          type: Opaque
+          stringData:
+            POSTGRES_PASSWORD: supernanny
+
+    - name: Appliquer PersistentVolume pour Postgres
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/postgre-pv.yaml') }}"
+
+    - name: Appliquer StatefulSet et Service Postgres
+      k8s:
+        kubeconfig: ~/.kube/config
+        state: present
+        definition: "{{ lookup('file', '../objects/postgres.yaml') }}"
+        namespace: default
+
+    # - name: Vérifier que la BDD soit en état Ready
+    #   shell: kubectl wait --for=condition=running pod/postgres-0 --timeout=180s --namespace=default
+    #   register: wait_postgres
+    #   retries: 5
+    #   delay: 10
+    #   until: wait_postgres.rc == 0
+    #   changed_when: false
+
+    # - name: Appliquer Deployment et Service microservice BDD
+    #   k8s:
+    #     kubeconfig: ~/.kube/config
+    #     state: present
+    #     definition: "{{ lookup('file', '../objects/microservice_bdd.yaml') }}"
+    #     namespace: default
+
+    # - name: Appliquer Deployment et Service sandbox application
+    #   k8s:
+    #     kubeconfig: ~/.kube/config
+    #     state: present
+    #     definition: "{{ lookup('file', '../objects/sandbox.yaml') }}"
+    #     namespace: default
+
+    # - name: Appliquer Deployment et grafana pvc
+    #   k8s:
+    #     kubeconfig: ~/.kube/config
+    #     state: present
+    #     definition: "{{ lookup('file', '../objects/grafana-pvc.yaml') }}"
+    #     namespace: default
+
+    # - name: Appliquer Deployment et api
+    #   k8s:
+    #     kubeconfig: ~/.kube/config
+    #     state: present
+    #     definition: "{{ lookup('file', '../objects/api.yaml') }}"
+    #     namespace: default
+
+    # - name: Appliquer Deployment et grafana
+    #   k8s:
+    #     kubeconfig: ~/.kube/config
+    #     state: present
+    #     definition: "{{ lookup('file', '../objects/grafana.yaml') }}"
+    #     namespace: default
